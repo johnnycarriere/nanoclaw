@@ -337,6 +337,214 @@ Use available_groups.json to find the JID for a group. The folder name must be c
   },
 );
 
+// ── SSH Proxy tool ──────────────────────────────────────────────────────────
+
+const RESPONSES_DIR = path.join(IPC_DIR, 'responses');
+
+function waitForResponse(requestId: string, timeoutMs: number): Promise<string> {
+  const responseFile = path.join(RESPONSES_DIR, `${requestId}.json`);
+  const start = Date.now();
+  const pollInterval = 500;
+
+  return new Promise((resolve, reject) => {
+    const check = () => {
+      if (fs.existsSync(responseFile)) {
+        const content = fs.readFileSync(responseFile, 'utf-8');
+        fs.unlinkSync(responseFile); // Clean up
+        resolve(content);
+        return;
+      }
+      if (Date.now() - start > timeoutMs + 10000) { // Extra 10s for SSH overhead
+        reject(new Error('Timed out waiting for SSH response from host'));
+        return;
+      }
+      setTimeout(check, pollInterval);
+    };
+    check();
+  });
+}
+
+server.tool(
+  'run_ssh',
+  `Run a command on a remote machine via the host's SSH proxy. The host executes the SSH command using its own keys — no credentials are needed in the container.
+
+Only hosts in the SSH allowlist can be reached. Current allowed hosts are configured by the user on the host machine.
+
+Use this for:
+- Checking server status, disk usage, running processes
+- Reading logs or config files on remote machines
+- Running maintenance commands
+- Any remote administration task
+
+The command runs non-interactively (batch mode). Interactive commands (vim, top, etc.) will not work.`,
+  {
+    host: z.string().describe('The remote host IP or hostname (must be in SSH allowlist)'),
+    command: z.string().describe('The shell command to run on the remote machine'),
+    user: z.string().optional().describe('SSH user (defaults to the allowlist-configured user for this host)'),
+    port: z.number().optional().describe('SSH port (defaults to allowlist config or 22)'),
+    timeout: z.number().optional().describe('Command timeout in ms (default 30000, max set by allowlist)'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [{ type: 'text' as const, text: 'SSH proxy is only available from the main group.' }],
+        isError: true,
+      };
+    }
+
+    const requestId = `ssh-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const timeoutMs = args.timeout || 30000;
+
+    const data = {
+      type: 'ssh_command',
+      requestId,
+      host: args.host,
+      command: args.command,
+      user: args.user || undefined,
+      port: args.port || undefined,
+      timeout: timeoutMs,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    try {
+      const raw = await waitForResponse(requestId, timeoutMs);
+      const response = JSON.parse(raw) as {
+        stdout: string;
+        stderr: string;
+        exitCode: number;
+        error?: string;
+      };
+
+      if (response.error) {
+        return {
+          content: [{ type: 'text' as const, text: `SSH error: ${response.error}` }],
+          isError: true,
+        };
+      }
+
+      let output = '';
+      if (response.stdout) output += response.stdout;
+      if (response.stderr) output += `\n--- stderr ---\n${response.stderr}`;
+      output += `\n--- exit code: ${response.exitCode} ---`;
+
+      return {
+        content: [{ type: 'text' as const, text: output || '(no output)' }],
+        isError: response.exitCode !== 0,
+      };
+    } catch (err) {
+      return {
+        content: [{ type: 'text' as const, text: `SSH proxy failed: ${err instanceof Error ? err.message : String(err)}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+// ── PasteBaw tools ──────────────────────────────────────────────────────────
+
+const PASTEBAW_BASE = 'https://pastebaw.duckdns.org';
+
+server.tool(
+  'create_paste',
+  `Create a paste on PasteBaw and return the shareable URL. Use this to share code snippets, logs, command output, or any long text that would clutter the chat. The returned URL can be sent to the user.
+
+Expiration options: "1h", "1d", "7d", "30d", "never". Default is "7d".`,
+  {
+    content: z.string().describe('The text content to paste'),
+    language: z.string().default('plaintext').describe('Syntax highlighting language (e.g., "typescript", "python", "json", "bash", "plaintext")'),
+    expiration: z.enum(['1h', '1d', '7d', '30d', 'never']).default('7d').describe('When the paste expires'),
+    password: z.string().optional().describe('Optional password to protect the paste'),
+  },
+  async (args) => {
+    try {
+      const body: Record<string, string> = {
+        content: args.content,
+        language: args.language,
+        expiration: args.expiration,
+      };
+      if (args.password) body.password = args.password;
+
+      const res = await fetch(`${PASTEBAW_BASE}/api/pastes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        return {
+          content: [{ type: 'text' as const, text: `PasteBaw error (${res.status}): ${text}` }],
+          isError: true,
+        };
+      }
+
+      const data = await res.json() as { id: string; url?: string };
+      const url = data.url || `${PASTEBAW_BASE}/${data.id}`;
+
+      return {
+        content: [{ type: 'text' as const, text: `Paste created: ${url}` }],
+      };
+    } catch (err) {
+      return {
+        content: [{ type: 'text' as const, text: `Failed to create paste: ${err instanceof Error ? err.message : String(err)}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+server.tool(
+  'get_paste',
+  `Retrieve the content of a PasteBaw paste by its ID or URL. Use this when a user shares a PasteBaw link and you need to read its contents.`,
+  {
+    paste: z.string().describe('Paste ID or full PasteBaw URL (e.g., "abc123" or "https://pastebaw.duckdns.org/abc123")'),
+    password: z.string().optional().describe('Password if the paste is protected'),
+  },
+  async (args) => {
+    try {
+      // Extract ID from URL if needed
+      let pasteId = args.paste;
+      if (pasteId.includes('pastebaw.duckdns.org')) {
+        const url = new URL(pasteId);
+        pasteId = url.pathname.split('/').filter(Boolean).pop() || pasteId;
+      }
+
+      const fetchUrl = `${PASTEBAW_BASE}/api/pastes/${pasteId}`;
+      const headers: Record<string, string> = {};
+      if (args.password) headers['X-Paste-Password'] = args.password;
+
+      const res = await fetch(fetchUrl, { headers });
+
+      if (!res.ok) {
+        const text = await res.text();
+        return {
+          content: [{ type: 'text' as const, text: `PasteBaw error (${res.status}): ${text}` }],
+          isError: true,
+        };
+      }
+
+      const data = await res.json() as { content: string; language?: string; title?: string };
+
+      let result = '';
+      if (data.title) result += `Title: ${data.title}\n`;
+      if (data.language) result += `Language: ${data.language}\n`;
+      result += `\n${data.content}`;
+
+      return {
+        content: [{ type: 'text' as const, text: result }],
+      };
+    } catch (err) {
+      return {
+        content: [{ type: 'text' as const, text: `Failed to retrieve paste: ${err instanceof Error ? err.message : String(err)}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

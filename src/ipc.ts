@@ -3,9 +3,17 @@ import path from 'path';
 
 import { CronExpressionParser } from 'cron-parser';
 
-import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
+import { execFile } from 'child_process';
+
+import { DATA_DIR, IPC_POLL_INTERVAL, SSH_ALLOWLIST_PATH, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
-import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
+import {
+  createTask,
+  deleteTask,
+  getTaskById,
+  storeBotMessage,
+  updateTask,
+} from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
@@ -82,6 +90,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   (targetGroup && targetGroup.folder === sourceGroup)
                 ) {
                   await deps.sendMessage(data.chatJid, data.text);
+                  storeBotMessage(data.chatJid, data.text);
                   logger.info(
                     { chatJid: data.chatJid, sourceGroup },
                     'IPC message sent',
@@ -154,6 +163,85 @@ export function startIpcWatcher(deps: IpcDeps): void {
   logger.info('IPC watcher started (per-group namespaces)');
 }
 
+// ── SSH Proxy ────────────────────────────────────────────────────────────────
+
+interface SshAllowlistEntry {
+  host: string;
+  user: string;
+  port?: number;
+  description?: string;
+}
+
+interface SshAllowlist {
+  allowedHosts: SshAllowlistEntry[];
+  maxTimeout: number;
+  mainOnly: boolean;
+}
+
+function loadSshAllowlist(): SshAllowlist | null {
+  try {
+    if (!fs.existsSync(SSH_ALLOWLIST_PATH)) return null;
+    return JSON.parse(fs.readFileSync(SSH_ALLOWLIST_PATH, 'utf-8'));
+  } catch (err) {
+    logger.error({ err }, 'Failed to load SSH allowlist');
+    return null;
+  }
+}
+
+function findAllowedHost(allowlist: SshAllowlist, host: string, user?: string): SshAllowlistEntry | undefined {
+  return allowlist.allowedHosts.find(
+    (entry) => entry.host === host && (!user || entry.user === user),
+  );
+}
+
+function runSshCommand(
+  user: string,
+  host: string,
+  port: number,
+  command: string,
+  timeoutMs: number,
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return new Promise((resolve) => {
+    const args = [
+      '-o', 'StrictHostKeyChecking=accept-new',
+      '-o', 'ConnectTimeout=10',
+      '-o', 'BatchMode=yes',
+      '-p', String(port),
+      `${user}@${host}`,
+      command,
+    ];
+
+    const child = execFile('ssh', args, {
+      timeout: timeoutMs,
+      maxBuffer: 1024 * 1024, // 1MB
+      encoding: 'utf-8',
+    }, (error, stdout, stderr) => {
+      const exitCode = error ? (error as NodeJS.ErrnoException & { code?: string | number }).code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+        ? 1
+        : (child.exitCode ?? 1)
+        : 0;
+      resolve({
+        stdout: String(stdout).slice(0, 100_000),
+        stderr: String(stderr).slice(0, 10_000),
+        exitCode: typeof exitCode === 'number' ? exitCode : 1,
+      });
+    });
+  });
+}
+
+function writeSshResponse(
+  sourceGroup: string,
+  requestId: string,
+  response: { stdout: string; stderr: string; exitCode: number; error?: string },
+): void {
+  const responsesDir = path.join(DATA_DIR, 'ipc', sourceGroup, 'responses');
+  fs.mkdirSync(responsesDir, { recursive: true });
+  const tempPath = path.join(responsesDir, `${requestId}.json.tmp`);
+  const finalPath = path.join(responsesDir, `${requestId}.json`);
+  fs.writeFileSync(tempPath, JSON.stringify(response));
+  fs.renameSync(tempPath, finalPath);
+}
+
 export async function processTaskIpc(
   data: {
     type: string;
@@ -166,6 +254,13 @@ export async function processTaskIpc(
     groupFolder?: string;
     chatJid?: string;
     targetJid?: string;
+    // For ssh_command
+    requestId?: string;
+    host?: string;
+    user?: string;
+    port?: number;
+    command?: string;
+    timeout?: number;
     // For register_group
     jid?: string;
     name?: string;
@@ -457,6 +552,65 @@ export async function processTaskIpc(
         );
       }
       break;
+
+    case 'ssh_command': {
+      if (!data.requestId || !data.host || !data.command) {
+        logger.warn({ data }, 'Invalid ssh_command request - missing fields');
+        break;
+      }
+
+      const allowlist = loadSshAllowlist();
+      if (!allowlist) {
+        writeSshResponse(sourceGroup, data.requestId, {
+          stdout: '', stderr: '', exitCode: 1,
+          error: 'SSH allowlist not configured at ~/.config/nanoclaw/ssh-allowlist.json',
+        });
+        break;
+      }
+
+      if (allowlist.mainOnly && !isMain) {
+        logger.warn({ sourceGroup }, 'Non-main group SSH attempt blocked');
+        writeSshResponse(sourceGroup, data.requestId, {
+          stdout: '', stderr: '', exitCode: 1,
+          error: 'SSH proxy is restricted to the main group',
+        });
+        break;
+      }
+
+      const allowedHost = findAllowedHost(allowlist, data.host, data.user);
+      if (!allowedHost) {
+        logger.warn({ host: data.host, user: data.user }, 'SSH host not in allowlist');
+        writeSshResponse(sourceGroup, data.requestId, {
+          stdout: '', stderr: '', exitCode: 1,
+          error: `Host ${data.user || '?'}@${data.host} is not in the SSH allowlist`,
+        });
+        break;
+      }
+
+      const sshUser = data.user || allowedHost.user;
+      const sshPort = data.port || allowedHost.port || 22;
+      const timeoutMs = Math.min(data.timeout || 30000, allowlist.maxTimeout);
+
+      logger.info(
+        { host: data.host, user: sshUser, sourceGroup, requestId: data.requestId },
+        'Executing SSH proxy command',
+      );
+
+      try {
+        const result = await runSshCommand(sshUser, data.host, sshPort, data.command, timeoutMs);
+        writeSshResponse(sourceGroup, data.requestId, result);
+        logger.info(
+          { host: data.host, exitCode: result.exitCode, requestId: data.requestId },
+          'SSH proxy command completed',
+        );
+      } catch (err) {
+        writeSshResponse(sourceGroup, data.requestId, {
+          stdout: '', stderr: '', exitCode: 1,
+          error: `SSH execution failed: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+      break;
+    }
 
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');

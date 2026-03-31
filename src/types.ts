@@ -51,6 +51,7 @@ export interface NewMessage {
   timestamp: string;
   is_from_me?: boolean;
   is_bot_message?: boolean;
+  thread_id?: string;
 }
 
 export interface ScheduledTask {
@@ -83,7 +84,7 @@ export interface TaskRunLog {
 export interface Channel {
   name: string;
   connect(): Promise<void>;
-  sendMessage(jid: string, text: string): Promise<void>;
+  sendMessage(jid: string, text: string): Promise<string | void>;
   isConnected(): boolean;
   ownsJid(jid: string): boolean;
   disconnect(): Promise<void>;
@@ -91,6 +92,18 @@ export interface Channel {
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
   // Optional: sync group/chat names from the platform.
   syncGroups?(force: boolean): Promise<void>;
+  // Optional: emoji reaction on a message (e.g. 👀 ⚙️ ✅)
+  setMessageReaction?(
+    jid: string,
+    messageId: string,
+    emoji: string,
+  ): Promise<void>;
+  // Optional: edit an existing message's text
+  editMessage?(
+    jid: string,
+    messageId: string,
+    text: string,
+  ): Promise<void>;
 }
 
 // Callback type that channels use to deliver inbound messages

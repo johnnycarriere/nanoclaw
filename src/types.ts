@@ -99,11 +99,7 @@ export interface Channel {
     emoji: string,
   ): Promise<void>;
   // Optional: edit an existing message's text
-  editMessage?(
-    jid: string,
-    messageId: string,
-    text: string,
-  ): Promise<void>;
+  editMessage?(jid: string, messageId: string, text: string): Promise<void>;
 }
 
 // Callback type that channels use to deliver inbound messages

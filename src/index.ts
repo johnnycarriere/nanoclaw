@@ -41,6 +41,7 @@ import {
   setRouterState,
   setSession,
   storeChatMetadata,
+  storeBotMessage,
   storeMessage,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
@@ -240,6 +241,15 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     'Processing messages',
   );
 
+  // React 👨‍💻 on the trigger message to indicate processing started
+  // Note: Telegram bots only support a fixed set of reaction emojis
+  const triggerMsgId = missedMessages[missedMessages.length - 1].id;
+  channel
+    .setMessageReaction?.(chatJid, triggerMsgId, '👨‍💻')
+    ?.catch((err) =>
+      logger.debug({ chatJid, err }, 'Failed to set processing reaction'),
+    );
+
   // Track idle timer for closing stdin when agent is idle
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -257,6 +267,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   await channel.setTyping?.(chatJid, true);
   let hadError = false;
   let outputSentToUser = false;
+  let doneReactionSent = false;
+  let lastSentMsgId: string | undefined;
+  let lastSentText: string | undefined;
+  const startTime = Date.now();
 
   const output = await runAgent(group, prompt, chatJid, async (result) => {
     // Streaming output callback — called for each agent result
@@ -269,7 +283,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
       if (text) {
-        await channel.sendMessage(chatJid, text);
+        const msgId = await channel.sendMessage(chatJid, text);
+        if (msgId) {
+          lastSentMsgId = typeof msgId === 'string' ? msgId : undefined;
+          lastSentText = text;
+        }
+        storeBotMessage(chatJid, text);
         outputSentToUser = true;
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
@@ -277,6 +296,25 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }
 
     if (result.status === 'success') {
+      // React 👍 immediately when agent finishes (don't wait for container exit)
+      if (outputSentToUser) {
+        channel
+          .setMessageReaction?.(chatJid, triggerMsgId, '👍')
+          ?.catch((err) =>
+            logger.debug({ chatJid, err }, 'Failed to set done reaction'),
+          );
+        // Append timing footer to last message
+        if (lastSentMsgId && lastSentText && channel.editMessage) {
+          const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+          const footer = `\n\n_⚡ ${elapsed}s_`;
+          channel
+            .editMessage(chatJid, lastSentMsgId, lastSentText + footer)
+            .catch((err) =>
+              logger.debug({ chatJid, err }, 'Failed to add timing footer'),
+            );
+        }
+        doneReactionSent = true;
+      }
       queue.notifyIdle(chatJid);
     }
 
@@ -287,6 +325,24 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
+
+  // Status reactions and footer — only if not already sent in streaming callback
+  if (outputSentToUser && !doneReactionSent) {
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    channel
+      .setMessageReaction?.(chatJid, triggerMsgId, '👍')
+      ?.catch((err) =>
+        logger.debug({ chatJid, err }, 'Failed to set done reaction'),
+      );
+    if (lastSentMsgId && lastSentText && channel.editMessage) {
+      const footer = `\n\n_⚡ ${elapsed}s_`;
+      channel
+        .editMessage(chatJid, lastSentMsgId, lastSentText + footer)
+        .catch((err) =>
+          logger.debug({ chatJid, err }, 'Failed to add timing footer'),
+        );
+    }
+  }
 
   if (output === 'error' || hadError) {
     // If we already sent output to the user, don't roll back the cursor —
@@ -567,18 +623,20 @@ async function main(): Promise<void> {
       );
       if (result.ok) {
         await channel.sendMessage(chatJid, result.url);
+        storeBotMessage(chatJid, result.url);
       } else {
-        await channel.sendMessage(
-          chatJid,
-          `Remote Control failed: ${result.error}`,
-        );
+        const errMsg = `Remote Control failed: ${result.error}`;
+        await channel.sendMessage(chatJid, errMsg);
+        storeBotMessage(chatJid, errMsg);
       }
     } else {
       const result = stopRemoteControl();
       if (result.ok) {
         await channel.sendMessage(chatJid, 'Remote Control session ended.');
+        storeBotMessage(chatJid, 'Remote Control session ended.');
       } else {
         await channel.sendMessage(chatJid, result.error);
+        storeBotMessage(chatJid, result.error);
       }
     }
   }
@@ -662,10 +720,10 @@ async function main(): Promise<void> {
     },
   });
   startIpcWatcher({
-    sendMessage: (jid, text) => {
+    sendMessage: async (jid, text) => {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
-      return channel.sendMessage(jid, text);
+      await channel.sendMessage(jid, text);
     },
     registeredGroups: () => registeredGroups,
     registerGroup,

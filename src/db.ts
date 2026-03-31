@@ -314,6 +314,23 @@ export function storeMessageDirect(msg: {
   );
 }
 
+/**
+ * Store an outbound bot message so it appears in conversation history.
+ */
+export function storeBotMessage(chatJid: string, text: string): void {
+  const id = `bot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  storeMessage({
+    id,
+    chat_jid: chatJid,
+    sender: 'bot',
+    sender_name: ASSISTANT_NAME,
+    content: text,
+    timestamp: String(Date.now()),
+    is_from_me: true,
+    is_bot_message: true,
+  });
+}
+
 export function getNewMessages(
   jids: string[],
   lastTimestamp: string,

@@ -3,6 +3,8 @@ import { Api, Bot } from 'grammy';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
+import { resolveGroupFolderPath } from '../group-folder.js';
+import { processImage } from '../image.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
@@ -28,16 +30,18 @@ async function sendTelegramMessage(
   chatId: string | number,
   text: string,
   options: { message_thread_id?: number } = {},
-): Promise<void> {
+): Promise<{ message_id: number } | undefined> {
   try {
-    await api.sendMessage(chatId, text, {
+    const msg = await api.sendMessage(chatId, text, {
       ...options,
       parse_mode: 'Markdown',
     });
+    return msg;
   } catch (err) {
     // Fallback: send as plain text if Markdown parsing fails
     logger.debug({ err }, 'Markdown send failed, falling back to plain text');
-    await api.sendMessage(chatId, text, options);
+    const msg = await api.sendMessage(chatId, text, options);
+    return msg;
   }
 }
 
@@ -149,6 +153,11 @@ export class TelegramChannel implements Channel {
         return;
       }
 
+      // React with 👀 immediately so the user knows the bot received it
+      this.setMessageReaction(chatJid, msgId, '👀').catch((err) =>
+        logger.debug({ chatJid, err }, 'Failed to set received reaction'),
+      );
+
       // Deliver message — startMessageLoop() will pick it up
       this.opts.onMessage(chatJid, {
         id: msgId,
@@ -201,7 +210,60 @@ export class TelegramChannel implements Channel {
       });
     };
 
-    this.bot.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
+    this.bot.on('message:photo', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+      if (!group) return;
+
+      const timestamp = new Date(ctx.message.date * 1000).toISOString();
+      const senderName =
+        ctx.from?.first_name ||
+        ctx.from?.username ||
+        ctx.from?.id?.toString() ||
+        'Unknown';
+      const caption = ctx.message.caption ? ` ${ctx.message.caption}` : '';
+      const msgId = ctx.message.message_id.toString();
+
+      const isGroup =
+        ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+      this.opts.onChatMetadata(
+        chatJid,
+        timestamp,
+        undefined,
+        'telegram',
+        isGroup,
+      );
+
+      // Download the highest-resolution photo from Telegram
+      let imagePath: string | null = null;
+      try {
+        const photos = ctx.message.photo;
+        const largest = photos[photos.length - 1]; // last element = highest res
+        const file = await ctx.api.getFile(largest.file_id);
+        const fileUrl = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+        const groupDir = resolveGroupFolderPath(group.folder);
+        imagePath = await processImage(fileUrl, groupDir, msgId);
+      } catch (err) {
+        logger.error({ chatJid, err }, 'Failed to download Telegram photo');
+      }
+
+      let content: string;
+      if (imagePath) {
+        content = `[Photo: ${imagePath}]${caption}`;
+      } else {
+        content = `[Photo]${caption}`;
+      }
+
+      this.opts.onMessage(chatJid, {
+        id: msgId,
+        chat_jid: chatJid,
+        sender: ctx.from?.id?.toString() || '',
+        sender_name: senderName,
+        content,
+        timestamp,
+        is_from_me: false,
+      });
+    });
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
     this.bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
     this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
@@ -243,7 +305,7 @@ export class TelegramChannel implements Channel {
     jid: string,
     text: string,
     threadId?: string,
-  ): Promise<void> {
+  ): Promise<string | void> {
     if (!this.bot) {
       logger.warn('Telegram bot not initialized');
       return;
@@ -257,22 +319,31 @@ export class TelegramChannel implements Channel {
 
       // Telegram has a 4096 character limit per message — split if needed
       const MAX_LENGTH = 4096;
+      let lastMessageId: number | undefined;
       if (text.length <= MAX_LENGTH) {
-        await sendTelegramMessage(this.bot.api, numericId, text, options);
+        const sent = await sendTelegramMessage(
+          this.bot.api,
+          numericId,
+          text,
+          options,
+        );
+        lastMessageId = sent?.message_id;
       } else {
         for (let i = 0; i < text.length; i += MAX_LENGTH) {
-          await sendTelegramMessage(
+          const sent = await sendTelegramMessage(
             this.bot.api,
             numericId,
             text.slice(i, i + MAX_LENGTH),
             options,
           );
+          lastMessageId = sent?.message_id;
         }
       }
       logger.info(
         { jid, length: text.length, threadId },
         'Telegram message sent',
       );
+      return lastMessageId ? lastMessageId.toString() : undefined;
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Telegram message');
     }
@@ -291,6 +362,56 @@ export class TelegramChannel implements Channel {
       this.bot.stop();
       this.bot = null;
       logger.info('Telegram bot stopped');
+    }
+  }
+
+  async setMessageReaction(
+    jid: string,
+    messageId: string,
+    emoji: string,
+  ): Promise<void> {
+    if (!this.bot) return;
+    try {
+      const numericId = jid.replace(/^tg:/, '');
+      await this.bot.api.setMessageReaction(
+        numericId,
+        parseInt(messageId, 10),
+        [{ type: 'emoji', emoji: emoji as any }],
+      );
+    } catch (err) {
+      logger.debug({ jid, messageId, emoji, err }, 'Failed to set reaction');
+    }
+  }
+
+  async editMessage(
+    jid: string,
+    messageId: string,
+    text: string,
+  ): Promise<void> {
+    if (!this.bot) return;
+    try {
+      const numericId = jid.replace(/^tg:/, '');
+      await this.bot.api.editMessageText(
+        numericId,
+        parseInt(messageId, 10),
+        text,
+        { parse_mode: 'Markdown' },
+      );
+    } catch (err) {
+      // Fallback to plain text if Markdown fails
+      try {
+        const numericId = jid.replace(/^tg:/, '');
+        await this.bot.api.editMessageText(
+          numericId,
+          parseInt(messageId, 10),
+          text,
+        );
+      } catch (editErr) {
+        logger.debug(
+          { jid, messageId, err: editErr },
+          'Failed to edit message',
+        );
+      }
     }
   }
 

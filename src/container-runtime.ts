@@ -19,6 +19,22 @@ export function hostGatewayArgs(): string[] {
   return [];
 }
 
+/** CLI args to connect the container to the OneCLI Docker network (Linux only).
+ *  On Linux, OneCLI runs in Docker too, so agent containers must join the same
+ *  network to reach the proxy. On macOS, host networking handles this. */
+export function onecliNetworkArgs(): string[] {
+  if (os.platform() !== 'linux') return [];
+  try {
+    execSync('docker network inspect onecli_onecli', {
+      stdio: 'pipe',
+      timeout: 5000,
+    });
+    return ['--network', 'onecli_onecli'];
+  } catch {
+    return [];
+  }
+}
+
 /** Returns CLI args for a readonly bind mount. */
 export function readonlyMountArgs(
   hostPath: string,

@@ -21,6 +21,7 @@ import { logger } from './logger.js';
 import {
   CONTAINER_RUNTIME_BIN,
   hostGatewayArgs,
+  onecliNetworkArgs,
   readonlyMountArgs,
   stopContainer,
 } from './container-runtime.js';
@@ -193,13 +194,22 @@ function buildVolumeMounts(
     'agent-runner-src',
   );
   if (fs.existsSync(agentRunnerSrc)) {
-    const srcIndex = path.join(agentRunnerSrc, 'index.ts');
-    const cachedIndex = path.join(groupAgentRunnerDir, 'index.ts');
-    const needsCopy =
-      !fs.existsSync(groupAgentRunnerDir) ||
-      !fs.existsSync(cachedIndex) ||
-      (fs.existsSync(srcIndex) &&
-        fs.statSync(srcIndex).mtimeMs > fs.statSync(cachedIndex).mtimeMs);
+    // Check if ANY source file is newer than its cached copy (not just index.ts).
+    // This ensures changes to ipc-mcp-stdio.ts or other files trigger a recopy.
+    let needsCopy = !fs.existsSync(groupAgentRunnerDir);
+    if (!needsCopy) {
+      for (const file of fs.readdirSync(agentRunnerSrc)) {
+        const srcFile = path.join(agentRunnerSrc, file);
+        const cachedFile = path.join(groupAgentRunnerDir, file);
+        if (
+          !fs.existsSync(cachedFile) ||
+          fs.statSync(srcFile).mtimeMs > fs.statSync(cachedFile).mtimeMs
+        ) {
+          needsCopy = true;
+          break;
+        }
+      }
+    }
     if (needsCopy) {
       fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
     }
@@ -250,6 +260,22 @@ async function buildContainerArgs(
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
+
+  // On Linux, join the OneCLI Docker network so the proxy is reachable.
+  // When on the same network, rewrite proxy env vars to use Docker DNS
+  // instead of host.docker.internal (which can't reach the OneCLI container).
+  const networkArgs = onecliNetworkArgs();
+  if (networkArgs.length > 0) {
+    args.push(...networkArgs);
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '-e' && args[i + 1]?.includes('host.docker.internal')) {
+        args[i + 1] = args[i + 1].replace(
+          /host\.docker\.internal/g,
+          'onecli-app-1',
+        );
+      }
+    }
+  }
 
   // Run as host user so bind-mounted files are accessible.
   // Skip when running as root (uid 0), as the container's node user (uid 1000),

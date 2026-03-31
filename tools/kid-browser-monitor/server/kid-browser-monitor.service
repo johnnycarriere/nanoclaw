@@ -1,0 +1,14 @@
+[Unit]
+Description=Kid Browser Monitor Collection Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/jlc/nanoclaw/tools/kid-browser-monitor/server/server.py
+Environment=KBM_API_KEY=3b592b51d5fc36531d15c46153d6143ea6c8c4edc8ac7ec564084fd1c4ad909b
+Environment=KBM_DB_PATH=/home/jlc/nanoclaw/groups/telegram_main/kid-browser-history.db
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

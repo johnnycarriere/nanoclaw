@@ -38,6 +38,10 @@ When working as a sub-agent or teammate, only use `send_message` if instructed t
 
 Files you create are saved in `/workspace/group/`. Use this for notes, research, or anything that should persist.
 
+## Images
+
+When users send photos, you'll see `[Photo: /workspace/group/images/photo-xxx.jpg]` in the message. Use the Read tool to view the image — it supports PNG, JPG, and other image formats. Always read the image before responding so you can see what the user sent.
+
 ## Memory
 
 The `conversations/` folder contains searchable history of past conversations. Use this to recall context from previous sessions.

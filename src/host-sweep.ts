@@ -157,6 +157,10 @@ async function sweepSession(session: Session): Promise<void> {
     // 1. Sync processing_ack → messages_in status
     if (outDb) {
       syncProcessingAcks(inDb, outDb);
+      // 1b. Emit status-lifecycle emoji reactions (👨‍💻 on claim, 👍 on done)
+      //     so the user sees real-time progress in the chat UI.
+      const { emitStatusReactions } = await import('./status-reactions.js');
+      await emitStatusReactions(inDb, outDb);
     }
 
     const alive = isContainerRunning(session.id);

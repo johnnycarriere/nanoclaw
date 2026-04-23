@@ -170,6 +170,11 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
     channelType: adapter.name,
     supportsThreads: config.supportsThreads,
 
+    postReaction: async (platformId: string, messageId: string, emoji: string) => {
+      const tid = platformId;
+      await adapter.addReaction(tid, messageId, emoji);
+    },
+
     async setup(hostConfig: ChannelSetup) {
       setupConfig = hostConfig;
 

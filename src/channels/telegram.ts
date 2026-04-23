@@ -15,6 +15,7 @@ import { sanitizeTelegramLegacyMarkdown } from './telegram-markdown-sanitize.js'
 import { registerChannelAdapter } from './channel-registry.js';
 import type { ChannelAdapter, ChannelSetup, InboundMessage } from './adapter.js';
 import { tryConsume } from './telegram-pairing.js';
+import { maybeTranscribeVoice } from './telegram-voice-transcribe.js';
 
 /**
  * Retry a one-shot operation that can fail on transient network errors at
@@ -217,9 +218,31 @@ registerChannelAdapter('telegram', {
     const wrapped: ChannelAdapter = {
       ...bridge,
       async setup(hostConfig: ChannelSetup) {
+        const pairing = createPairingInterceptor(botUsernamePromise, hostConfig.onInbound, token);
+        // Pre-pairing wrapper: (1) transcribe voice notes in place, so the
+        // agent sees text instead of an empty message + audio blob;
+        // (2) react with 👀 on inbound so the user knows the bot received
+        // the message even before the container spawns.
+        const withVoiceAndReaction: ChannelSetup['onInbound'] = async (platformId, threadId, message) => {
+          try {
+            if (message.kind === 'chat-sdk' && message.content && typeof message.content === 'object') {
+              await maybeTranscribeVoice(message.content as Record<string, unknown>);
+            }
+          } catch (err) {
+            log.warn('Telegram voice transcribe wrapper error', { err });
+          }
+          // Fire the 👀 reaction without awaiting — it's a nice-to-have and
+          // must not delay routing.
+          if (message.id) {
+            telegramAdapter
+              .addReaction(platformId, message.id, '👀')
+              .catch((err) => log.debug('addReaction eyes failed', { err }));
+          }
+          await pairing(platformId, threadId, message);
+        };
         const intercepted: ChannelSetup = {
           ...hostConfig,
-          onInbound: createPairingInterceptor(botUsernamePromise, hostConfig.onInbound, token),
+          onInbound: withVoiceAndReaction,
         };
         return withRetry(() => bridge.setup(intercepted), 'bridge.setup');
       },

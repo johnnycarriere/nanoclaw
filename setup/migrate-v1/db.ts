@@ -115,11 +115,22 @@ export async function run(args: string[]): Promise<void> {
     return;
   }
 
-  const v1Groups = v1Db
-    .prepare(
-      'SELECT jid, name, folder, trigger_pattern, requires_trigger, is_main, channel_name FROM registered_groups',
-    )
-    .all() as V1Group[];
+  // channel_name was a late v1 addition (post-1.2.x) — older DBs lack it.
+  // Detect and fall back to selecting without it; inferChannelType handles null.
+  const hasChannelName = (v1Db
+    .prepare("PRAGMA table_info(registered_groups)")
+    .all() as Array<{ name: string }>).some((c) => c.name === 'channel_name');
+  const v1Groups = hasChannelName
+    ? (v1Db
+        .prepare(
+          'SELECT jid, name, folder, trigger_pattern, requires_trigger, is_main, channel_name FROM registered_groups',
+        )
+        .all() as V1Group[])
+    : (v1Db
+        .prepare(
+          'SELECT jid, name, folder, trigger_pattern, requires_trigger, is_main, NULL AS channel_name FROM registered_groups',
+        )
+        .all() as V1Group[]);
   v1Db.close();
 
   // Filter by selection mode. "wired-only" keeps rows where we can confidently

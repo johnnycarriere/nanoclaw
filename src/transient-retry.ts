@@ -80,11 +80,7 @@ function clearProcessingAck(outDbPath: string, messageId: string): void {
 // message id.
 const retried = new Map<string, number>();
 
-export function detectAndRetryTransient(
-  inDb: Database.Database,
-  outDb: Database.Database,
-  outDbPath: string,
-): void {
+export function detectAndRetryTransient(inDb: Database.Database, outDb: Database.Database, outDbPath: string): void {
   const errors = findTransientErrors(outDb, /* sinceSeconds */ 30 * 60);
   if (errors.length === 0) return;
 

@@ -42,7 +42,7 @@ import {
   type ContainerState,
 } from './db/session-db.js';
 import { log } from './log.js';
-import { openInboundDb, openOutboundDb, inboundDbPath, heartbeatPath } from './session-manager.js';
+import { openInboundDb, openOutboundDb, inboundDbPath, outboundDbPath, heartbeatPath } from './session-manager.js';
 import { isContainerRunning, killContainer, wakeContainer } from './container-runner.js';
 import type { Session } from './types.js';
 
@@ -165,7 +165,7 @@ async function sweepSession(session: Session): Promise<void> {
       //     connectivity error string (OneCLI MITM storm, ECONNRESET, etc.)
       //     and re-queue them with exponential backoff.
       const { detectAndRetryTransient } = await import('./transient-retry.js');
-      detectAndRetryTransient(inDb, outDb);
+      detectAndRetryTransient(inDb, outDb, outboundDbPath(agentGroup.id, session.id));
     }
 
     // 2. Wake a container if work is due and nothing is running. Ordered

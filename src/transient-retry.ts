@@ -23,7 +23,7 @@
  */
 import type Database from 'better-sqlite3';
 
-import { getMessageForRetry, retryWithBackoff, markMessageFailed } from './db/session-db.js';
+import { getMessageForRetry, retryWithBackoff, markMessageFailed, openOutboundDbRW } from './db/session-db.js';
 import { log } from './log.js';
 
 const MAX_TRIES = 5;
@@ -62,9 +62,16 @@ function findTransientErrors(outDb: Database.Database, sinceSeconds: number): Ou
   return rows.filter((r) => TRANSIENT_PATTERNS.some((p) => r.content.includes(p)));
 }
 
-function clearProcessingAck(outDb: Database.Database, messageId: string): void {
+function clearProcessingAck(outDbPath: string, messageId: string): void {
   // Narrow sanctioned host-write to a container-owned table. See header.
-  outDb.prepare('DELETE FROM processing_ack WHERE message_id = ?').run(messageId);
+  // Open RW briefly so we don't hold a writer through the whole sweep, and
+  // so the host's normal outbound reader can stay readonly.
+  const db = openOutboundDbRW(outDbPath);
+  try {
+    db.prepare('DELETE FROM processing_ack WHERE message_id = ?').run(messageId);
+  } finally {
+    db.close();
+  }
 }
 
 // Idempotency: a single sweep can see the same error row twice if it
@@ -73,7 +80,11 @@ function clearProcessingAck(outDb: Database.Database, messageId: string): void {
 // message id.
 const retried = new Map<string, number>();
 
-export function detectAndRetryTransient(inDb: Database.Database, outDb: Database.Database): void {
+export function detectAndRetryTransient(
+  inDb: Database.Database,
+  outDb: Database.Database,
+  outDbPath: string,
+): void {
   const errors = findTransientErrors(outDb, /* sinceSeconds */ 30 * 60);
   if (errors.length === 0) return;
 
@@ -103,7 +114,7 @@ export function detectAndRetryTransient(inDb: Database.Database, outDb: Database
     const backoffSec = Math.floor(backoffMs / 1000);
     inDb.prepare("UPDATE messages_in SET status = 'pending' WHERE id = ?").run(msgId);
     retryWithBackoff(inDb, msgId, backoffSec);
-    clearProcessingAck(outDb, msgId);
+    clearProcessingAck(outDbPath, msgId);
     retried.set(msgId, Date.now());
 
     log.info('Retrying message after transient error', {

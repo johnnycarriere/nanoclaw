@@ -32,6 +32,19 @@ export function openOutboundDb(dbPath: string): Database.Database {
   return db;
 }
 
+/**
+ * Open the outbound DB read-write for a sanctioned host-write. The container
+ * owns this DB; only narrow paths write here (transient-retry's processing_ack
+ * clear, command-gate's writeOutboundDirect). Callers must open-write-CLOSE
+ * per op to honor the cross-mount invariant.
+ */
+export function openOutboundDbRW(dbPath: string): Database.Database {
+  const db = new Database(dbPath);
+  db.pragma('journal_mode = DELETE');
+  db.pragma('busy_timeout = 5000');
+  return db;
+}
+
 export function upsertSessionRouting(
   db: Database.Database,
   routing: { channel_type: string | null; platform_id: string | null; thread_id: string | null },

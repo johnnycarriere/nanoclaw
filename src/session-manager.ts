@@ -29,6 +29,7 @@ import {
   ensureSchema,
   openInboundDb as openInboundDbRaw,
   openOutboundDb as openOutboundDbRaw,
+  openOutboundDbRW as openOutboundDbRWRaw,
   upsertSessionRouting,
   insertMessage,
   migrateMessagesInTable,
@@ -280,6 +281,14 @@ export function openOutboundDb(agentGroupId: string, sessionId: string): Databas
 }
 
 /**
+ * Open the outbound DB read-write for a sanctioned host-write. Caller MUST
+ * close per op — see db/session-db.ts:openOutboundDbRW.
+ */
+export function openOutboundDbRW(agentGroupId: string, sessionId: string): Database.Database {
+  return openOutboundDbRWRaw(outboundDbPath(agentGroupId, sessionId));
+}
+
+/**
  * Write a message directly to a session's outbound DB so the host delivery
  * loop picks it up. Used by the command gate to send denial responses
  * without waking a container.
@@ -296,7 +305,7 @@ export function writeOutboundDirect(
     content: string;
   },
 ): void {
-  const db = openOutboundDb(agentGroupId, sessionId);
+  const db = openOutboundDbRW(agentGroupId, sessionId);
   try {
     db.prepare(
       `INSERT OR IGNORE INTO messages_out (id, seq, timestamp, kind, platform_id, channel_type, thread_id, content)

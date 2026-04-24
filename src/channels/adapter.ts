@@ -137,6 +137,18 @@ export interface ChannelAdapter {
   syncConversations?(): Promise<ConversationInfo[]>;
 
   /**
+   * Host-side emoji reaction. Used for status signalling on inbound
+   * messages — e.g. 👨‍💻 when processing starts, 👍 when complete — by
+   * the processing-ack sweeper. Separate from the container-emitted
+   * reaction path (which goes through delivery of kind='chat' with
+   * content.operation='reaction'); this lets the host react without
+   * writing to outbound.db (container-owned).
+   *
+   * Omit on channels that don't support reactions; callers no-op.
+   */
+  postReaction?(platformId: string, messageId: string, emoji: string): Promise<void>;
+
+  /**
    * Subscribe the bot to a thread so follow-up messages route via the
    * platform's "subscribed message" path (onSubscribedMessage in Chat SDK).
    * Called by the router when a mention-sticky wiring first engages in a

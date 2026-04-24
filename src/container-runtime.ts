@@ -20,6 +20,25 @@ export function hostGatewayArgs(): string[] {
   return [];
 }
 
+/** CLI args to connect the container to the OneCLI Docker network (Linux only).
+ *  On Linux, OneCLI runs in Docker too, and Docker iptables DOCKER-USER chain
+ *  typically blocks container→docker0-bridge-IP traffic — so the proxy at
+ *  host.docker.internal:10255 times out. Joining the `onecli_onecli` network
+ *  gives direct in-docker DNS resolution to `onecli-app-1`. Macs use host
+ *  networking so this is unnecessary there. */
+export function onecliNetworkArgs(): string[] {
+  if (os.platform() !== 'linux') return [];
+  try {
+    execSync('docker network inspect onecli_onecli', {
+      stdio: 'pipe',
+      timeout: 5000,
+    });
+    return ['--network', 'onecli_onecli'];
+  } catch {
+    return [];
+  }
+}
+
 /** Returns CLI args for a readonly bind mount. */
 export function readonlyMountArgs(hostPath: string, containerPath: string): string[] {
   return ['-v', `${hostPath}:${containerPath}:ro`];

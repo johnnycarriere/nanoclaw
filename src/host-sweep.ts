@@ -157,6 +157,15 @@ async function sweepSession(session: Session): Promise<void> {
     // 1. Sync processing_ack → messages_in status
     if (outDb) {
       syncProcessingAcks(inDb, outDb);
+      // 1b. Emit status-lifecycle emoji reactions (👨‍💻 on claim, 👍 on done)
+      //     so the user sees real-time progress in the chat UI.
+      const { emitStatusReactions } = await import('./status-reactions.js');
+      await emitStatusReactions(inDb, outDb);
+      // 1c. Detect messages the agent-runner "completed" with an API-
+      //     connectivity error string (OneCLI MITM storm, ECONNRESET, etc.)
+      //     and re-queue them with exponential backoff.
+      const { detectAndRetryTransient } = await import('./transient-retry.js');
+      detectAndRetryTransient(inDb, outDb);
     }
 
     // 2. Wake a container if work is due and nothing is running. Ordered

@@ -20,7 +20,13 @@ import {
   TIMEZONE,
 } from './config.js';
 import { readContainerConfig, writeContainerConfig } from './container-config.js';
-import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
+import {
+  CONTAINER_RUNTIME_BIN,
+  hostGatewayArgs,
+  onecliNetworkArgs,
+  readonlyMountArgs,
+  stopContainer,
+} from './container-runtime.js';
 import { composeGroupClaudeMd } from './claude-md-compose.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { getDb, hasTable } from './db/connection.js';
@@ -308,6 +314,24 @@ function buildMounts(
     mounts.push({ hostPath: skillsSrc, containerPath: '/app/skills', readonly: true });
   }
 
+  // SSH keys — per-group opt-in via SSH_ALLOWED_FOLDERS env (comma-separated).
+  // v1's run_ssh used a host IPC proxy; v2 has no IPC, so we mount the host
+  // SSH dir read-only into authorized agent group containers instead. The
+  // container has openssh-client installed; keys are never copied, only
+  // mounted from /home/<user>/.ssh. Only agent groups whose folder is in
+  // the allowlist get the mount — orphan channels and least-privileged groups
+  // do not.
+  const sshAllowlist = (process.env.SSH_ALLOWED_FOLDERS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (sshAllowlist.includes(agentGroup.folder)) {
+    const hostSshDir = path.join(process.env.HOME ?? '', '.ssh');
+    if (hostSshDir && fs.existsSync(hostSshDir)) {
+      mounts.push({ hostPath: hostSshDir, containerPath: '/home/node/.ssh', readonly: true });
+    }
+  }
+
   // Additional mounts from container config
   if (containerConfig.additionalMounts && containerConfig.additionalMounts.length > 0) {
     const validated = validateAdditionalMounts(containerConfig.additionalMounts, agentGroup.name);
@@ -452,6 +476,22 @@ async function buildContainerArgs(
 
   // Host gateway
   args.push(...hostGatewayArgs());
+
+  // Linux-only: join the OneCLI Docker network so the proxy injected by
+  // applyContainerConfig is reachable. Without this, the proxy at
+  // host.docker.internal:10255 times out because docker0-bridge ingress
+  // is commonly blocked by DOCKER-USER iptables. Also rewrite any prior
+  // `-e HTTPS_PROXY=...host.docker.internal...` / HTTP_PROXY entries to
+  // use the onecli-app-1 in-network hostname so proxy auth/DNS works.
+  const onecliNet = onecliNetworkArgs();
+  if (onecliNet.length > 0) {
+    args.push(...onecliNet);
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '-e' && typeof args[i + 1] === 'string' && args[i + 1].includes('host.docker.internal')) {
+        args[i + 1] = args[i + 1].replace(/host\.docker\.internal/g, 'onecli-app-1');
+      }
+    }
+  }
 
   // User mapping
   const hostUid = process.getuid?.();

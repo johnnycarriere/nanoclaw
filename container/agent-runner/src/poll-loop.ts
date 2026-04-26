@@ -260,31 +260,72 @@ async function processQuery(
   // Stream liveness is decided host-side via the heartbeat file + processing
   // claim age (see src/host-sweep.ts); if something is truly stuck, the host
   // will kill the container and messages get reset to pending.
+  //
+  // Re-entrancy guard: this handler is async because applyPreTaskScripts can
+  // run for several seconds per scripted task (each script gets up to
+  // SCRIPT_TIMEOUT_MS=30s). Without `busy`, a long script run would let the
+  // next interval tick fire and double-claim/double-push the same rows.
+  let busy = false;
   const pollHandle = setInterval(() => {
-    if (done) return;
+    if (done || busy) return;
+    busy = true;
+    void (async () => {
+      try {
+        // Skip system messages (MCP tool responses) and /clear (needs fresh query).
+        // Thread routing is the router's concern — if a message landed in this
+        // session, the agent should see it. Per-thread sessions already isolate
+        // threads into separate containers; shared sessions intentionally merge
+        // everything. Filtering on thread_id here caused deadlocks when the
+        // initial batch and follow-ups had mismatched thread_ids (e.g. a
+        // host-generated welcome trigger with null thread vs a Discord DM reply).
+        const newMessages = getPendingMessages().filter((m) => {
+          if (m.kind === 'system') return false;
+          if ((m.kind === 'chat' || m.kind === 'chat-sdk') && isClearCommand(m)) return false;
+          return true;
+        });
+        if (newMessages.length === 0) return;
 
-    // Skip system messages (MCP tool responses) and /clear (needs fresh query).
-    // Thread routing is the router's concern — if a message landed in this
-    // session, the agent should see it. Per-thread sessions already isolate
-    // threads into separate containers; shared sessions intentionally merge
-    // everything. Filtering on thread_id here caused deadlocks when the
-    // initial batch and follow-ups had mismatched thread_ids (e.g. a
-    // host-generated welcome trigger with null thread vs a Discord DM reply).
-    const newMessages = getPendingMessages().filter((m) => {
-      if (m.kind === 'system') return false;
-      if ((m.kind === 'chat' || m.kind === 'chat-sdk') && isClearCommand(m)) return false;
-      return true;
-    });
-    if (newMessages.length > 0) {
-      const newIds = newMessages.map((m) => m.id);
-      markProcessing(newIds);
+        // Accumulate gate: same as the cold-batch path above (line 88-91).
+        // Without this, a trigger=0 (context-only) message landing during an
+        // active query would push as a follow-up and engage the agent — the
+        // exact opposite of the accumulate-only contract.
+        if (!newMessages.some((m) => m.trigger === 1)) return;
 
-      const prompt = formatMessages(newMessages);
-      log(`Pushing ${newMessages.length} follow-up message(s) into active query`);
-      query.push(prompt);
+        const newIds = newMessages.map((m) => m.id);
+        markProcessing(newIds);
 
-      markCompleted(newIds);
-    }
+        // Pre-task script gate: same as the cold-batch path (line 142-150).
+        // Tasks whose scripts return wakeAgent=false are gated out of the
+        // push so they don't reach the agent. Without this, every task fire
+        // during a warm container bypasses scripts entirely — the bug that
+        // motivated this hook block.
+        let keepFollow: MessageInRow[] = newMessages;
+        // MODULE-HOOK:scheduling-pre-task-followup:start
+        const { applyPreTaskScripts } = await import('./scheduling/task-script.js');
+        const preTask = await applyPreTaskScripts(newMessages);
+        keepFollow = preTask.keep;
+        if (preTask.skipped.length > 0) {
+          markCompleted(preTask.skipped);
+          log(`Pre-task script skipped ${preTask.skipped.length} follow-up task(s): ${preTask.skipped.join(', ')}`);
+        }
+        // MODULE-HOOK:scheduling-pre-task-followup:end
+
+        if (keepFollow.length === 0) {
+          log(`All ${newMessages.length} follow-up message(s) gated by script`);
+          return;
+        }
+
+        const prompt = formatMessages(keepFollow);
+        log(`Pushing ${keepFollow.length} follow-up message(s) into active query`);
+        query.push(prompt);
+
+        markCompleted(keepFollow.map((m) => m.id));
+      } catch (err) {
+        log(`Follow-up poll error: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        busy = false;
+      }
+    })();
   }, ACTIVE_POLL_INTERVAL_MS);
 
   try {

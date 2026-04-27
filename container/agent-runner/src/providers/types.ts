@@ -27,9 +27,42 @@ export interface ProviderOptions {
   additionalDirectories?: string[];
 }
 
+/**
+ * Content block for multipart user messages. Mirrors the Anthropic
+ * Messages API shape so providers built on the Claude Agent SDK can pass
+ * blocks through with no translation. Other providers may downcast to
+ * the text portion only — see promptToText().
+ */
+export type ContentBlock =
+  | { type: 'text'; text: string }
+  | {
+      type: 'image';
+      source: {
+        type: 'base64';
+        media_type: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
+        data: string;
+      };
+    };
+
+/**
+ * Reduce a possibly-multipart prompt to plain text. Used by providers that
+ * don't support image blocks (mock, future text-only backends) and by log
+ * lines that don't want to spew base64 payloads.
+ */
+export function promptToText(prompt: string | ContentBlock[]): string {
+  if (typeof prompt === 'string') return prompt;
+  return prompt
+    .map((b) => (b.type === 'text' ? b.text : `[image:${b.source.media_type}]`))
+    .join('\n');
+}
+
 export interface QueryInput {
-  /** Initial prompt (already formatted by agent-runner). */
-  prompt: string;
+  /**
+   * Initial prompt (already formatted by agent-runner). String for
+   * text-only turns; an array of content blocks when the batch includes
+   * image attachments.
+   */
+  prompt: string | ContentBlock[];
 
   /**
    * Opaque continuation token from a previous query. The provider decides
@@ -57,7 +90,7 @@ export interface McpServerConfig {
 
 export interface AgentQuery {
   /** Push a follow-up message into the active query. */
-  push(message: string): void;
+  push(message: string | ContentBlock[]): void;
 
   /** Signal that no more input will be sent. */
   end(): void;

@@ -1,3 +1,4 @@
+import { loadImageAttachment, type ImageContent } from './attachments.js';
 import { findByRouting } from './destinations.js';
 import type { MessageInRow } from './db/messages-in.js';
 import { TIMEZONE, formatLocalTime } from './timezone.js';
@@ -113,8 +114,15 @@ export function extractRouting(messages: MessageInRow[]): RoutingContext {
  * agent scheduled tasks for the wrong hour.
  *
  * Strips routing fields — the agent never sees platform_id, channel_type, thread_id.
+ *
+ * If `imagesSink` is provided, image attachments with a resolvable, in-budget
+ * file are loaded as base64 and pushed onto it; their text marker is omitted
+ * (a brief `[image: name]` placeholder is left so the model can correlate
+ * each rendered image with its message). Without the sink, attachments fall
+ * back to the legacy path-marker text — unchanged behavior for callers that
+ * can't carry image content blocks (e.g. unit tests, pure-string consumers).
  */
-export function formatMessages(messages: MessageInRow[]): string {
+export function formatMessages(messages: MessageInRow[], imagesSink?: ImageContent[]): string {
   const header = `<context timezone="${escapeXml(TIMEZONE)}" />\n`;
   if (messages.length === 0) return header;
 
@@ -127,7 +135,7 @@ export function formatMessages(messages: MessageInRow[]): string {
   const parts: string[] = [];
 
   if (chatMessages.length > 0) {
-    parts.push(formatChatMessages(chatMessages));
+    parts.push(formatChatMessages(chatMessages, imagesSink));
   }
   if (taskMessages.length > 0) {
     parts.push(...taskMessages.map(formatTaskMessage));
@@ -142,20 +150,31 @@ export function formatMessages(messages: MessageInRow[]): string {
   return header + parts.join('\n\n');
 }
 
-function formatChatMessages(messages: MessageInRow[]): string {
+/**
+ * Convenience wrapper that returns text + extracted image content blocks
+ * together. Use this on the prompt path so the agent gets actual rendered
+ * images instead of a path marker pointing at a binary file it can't see.
+ */
+export function formatMessagesForPrompt(messages: MessageInRow[]): { text: string; images: ImageContent[] } {
+  const images: ImageContent[] = [];
+  const text = formatMessages(messages, images);
+  return { text, images };
+}
+
+function formatChatMessages(messages: MessageInRow[], imagesSink?: ImageContent[]): string {
   if (messages.length === 1) {
-    return formatSingleChat(messages[0]);
+    return formatSingleChat(messages[0], imagesSink);
   }
 
   const lines = ['<messages>'];
   for (const msg of messages) {
-    lines.push(formatSingleChat(msg));
+    lines.push(formatSingleChat(msg, imagesSink));
   }
   lines.push('</messages>');
   return lines.join('\n');
 }
 
-function formatSingleChat(msg: MessageInRow): string {
+function formatSingleChat(msg: MessageInRow, imagesSink?: ImageContent[]): string {
   const content = parseContent(msg.content);
   const sender = content.sender || content.author?.fullName || content.author?.userName || 'Unknown';
   const time = formatLocalTime(msg.timestamp, TIMEZONE);
@@ -163,7 +182,7 @@ function formatSingleChat(msg: MessageInRow): string {
   const idAttr = msg.seq != null ? ` id="${msg.seq}"` : '';
   const replyAttr = content.replyTo?.id ? ` reply_to="${escapeXml(String(content.replyTo.id))}"` : '';
   const replyPrefix = formatReplyContext(content.replyTo);
-  const attachmentsSuffix = formatAttachments(content.attachments);
+  const attachmentsSuffix = formatAttachments(content.attachments, imagesSink);
 
   // Look up the destination name for the origin (reverse map lookup).
   // If not found, fall back to a raw channel:platform_id marker so nothing
@@ -220,15 +239,30 @@ function formatReplyContext(replyTo: any): string {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function formatAttachments(attachments: any[] | undefined): string {
+function formatAttachments(attachments: any[] | undefined, imagesSink?: ImageContent[]): string {
   if (!Array.isArray(attachments) || attachments.length === 0) return '';
   const parts = attachments.map((a) => {
     const name = a.name || a.filename || 'attachment';
     const type = a.type || 'file';
-    const localPath = a.localPath ? `/workspace/${a.localPath}` : '';
+    const localPath = a.localPath || '';
     const url = a.url || '';
+
+    // Image inlining: when the caller can carry image content blocks, try
+    // to load the file as base64 and push it onto the sink. On success,
+    // leave a brief placeholder so the model can correlate the rendered
+    // image with the surrounding message context. On failure (missing
+    // file, oversized, unrecognized format) fall through to the legacy
+    // path-marker so nothing silently disappears.
+    if (imagesSink && type === 'image' && localPath) {
+      const img = loadImageAttachment(localPath);
+      if (img) {
+        imagesSink.push(img);
+        return `[image: ${escapeXml(name)}]`;
+      }
+    }
+
     if (localPath) {
-      return `[${type}: ${escapeXml(name)} — saved to ${escapeXml(localPath)}]`;
+      return `[${type}: ${escapeXml(name)} — saved to /workspace/${escapeXml(localPath)}]`;
     }
     return url ? `[${type}: ${escapeXml(name)} (${escapeXml(url)})]` : `[${type}: ${escapeXml(name)}]`;
   });

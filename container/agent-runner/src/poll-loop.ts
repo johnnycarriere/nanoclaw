@@ -7,8 +7,8 @@ import {
   migrateLegacyContinuation,
   setContinuation,
 } from './db/session-state.js';
-import { formatMessages, extractRouting, categorizeMessage, isClearCommand, stripInternalTags, type RoutingContext } from './formatter.js';
-import type { AgentProvider, AgentQuery, ProviderEvent } from './providers/types.js';
+import { formatMessagesForPrompt, extractRouting, categorizeMessage, isClearCommand, stripInternalTags, type RoutingContext } from './formatter.js';
+import type { AgentProvider, AgentQuery, ContentBlock, ProviderEvent } from './providers/types.js';
 
 const POLL_INTERVAL_MS = 1000;
 const ACTIVE_POLL_INTERVAL_MS = 500;
@@ -156,9 +156,13 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
 
     // Format messages: passthrough commands get raw text (only if the
     // provider natively handles slash commands), others get XML.
-    const prompt = formatMessagesWithCommands(keep, config.provider.supportsNativeSlashCommands);
+    const formatted = formatMessagesWithCommands(keep, config.provider.supportsNativeSlashCommands);
+    const prompt = toProviderPrompt(formatted);
 
-    log(`Processing ${keep.length} message(s), kinds: ${[...new Set(keep.map((m) => m.kind))].join(',')}`);
+    log(
+      `Processing ${keep.length} message(s), kinds: ${[...new Set(keep.map((m) => m.kind))].join(',')}` +
+        (formatted.images.length > 0 ? `, ${formatted.images.length} image(s) inlined` : ''),
+    );
 
     const query = config.provider.query({
       prompt,
@@ -212,20 +216,32 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
  * When the provider handles slash commands natively (Claude Code),
  * passthrough commands are sent raw (no XML wrapping) so the SDK can
  * dispatch them. Otherwise they fall through to standard XML formatting.
+ *
+ * Returns text + extracted image attachments. Images sit alongside the
+ * text rather than inside it because the SDK needs them as structured
+ * `image` content blocks — see toProviderPrompt().
  */
-function formatMessagesWithCommands(messages: MessageInRow[], nativeSlashCommands: boolean): string {
+function formatMessagesWithCommands(
+  messages: MessageInRow[],
+  nativeSlashCommands: boolean,
+): { text: string; images: { mediaType: string; data: string }[] } {
   const parts: string[] = [];
+  const images: { mediaType: string; data: string }[] = [];
   const normalBatch: MessageInRow[] = [];
+
+  const flushNormal = () => {
+    if (normalBatch.length === 0) return;
+    const out = formatMessagesForPrompt(normalBatch);
+    parts.push(out.text);
+    images.push(...out.images);
+    normalBatch.length = 0;
+  };
 
   for (const msg of messages) {
     if (nativeSlashCommands && (msg.kind === 'chat' || msg.kind === 'chat-sdk')) {
       const cmdInfo = categorizeMessage(msg);
       if (cmdInfo.category === 'passthrough' || cmdInfo.category === 'admin') {
-        // Flush normal batch first
-        if (normalBatch.length > 0) {
-          parts.push(formatMessages(normalBatch));
-          normalBatch.length = 0;
-        }
+        flushNormal();
         // Pass raw command text (no XML wrapping) — SDK handles it natively
         parts.push(cmdInfo.text);
         continue;
@@ -234,11 +250,31 @@ function formatMessagesWithCommands(messages: MessageInRow[], nativeSlashCommand
     normalBatch.push(msg);
   }
 
-  if (normalBatch.length > 0) {
-    parts.push(formatMessages(normalBatch));
-  }
+  flushNormal();
 
-  return parts.join('\n\n');
+  return { text: parts.join('\n\n'), images };
+}
+
+/**
+ * Build the provider prompt. Plain string when there are no images
+ * (cheaper to log and trace); a content-block array when one or more
+ * images need to ride alongside the text. Ordering puts text first so
+ * the model has the surrounding chat context before any image.
+ */
+function toProviderPrompt(formatted: { text: string; images: { mediaType: string; data: string }[] }): string | ContentBlock[] {
+  if (formatted.images.length === 0) return formatted.text;
+  const blocks: ContentBlock[] = [{ type: 'text', text: formatted.text }];
+  for (const img of formatted.images) {
+    blocks.push({
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: img.mediaType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+        data: img.data,
+      },
+    });
+  }
+  return blocks;
 }
 
 interface QueryResult {
@@ -315,9 +351,12 @@ async function processQuery(
           return;
         }
 
-        const prompt = formatMessages(keepFollow);
-        log(`Pushing ${keepFollow.length} follow-up message(s) into active query`);
-        query.push(prompt);
+        const formattedFollow = formatMessagesForPrompt(keepFollow);
+        log(
+          `Pushing ${keepFollow.length} follow-up message(s) into active query` +
+            (formattedFollow.images.length > 0 ? ` (${formattedFollow.images.length} image(s))` : ''),
+        );
+        query.push(toProviderPrompt(formattedFollow));
 
         markCompleted(keepFollow.map((m) => m.id));
       } catch (err) {

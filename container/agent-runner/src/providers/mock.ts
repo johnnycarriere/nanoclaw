@@ -1,5 +1,6 @@
 import { registerProvider } from './provider-registry.js';
-import type { AgentProvider, AgentQuery, ProviderEvent, ProviderOptions, QueryInput } from './types.js';
+import { promptToText } from './types.js';
+import type { AgentProvider, AgentQuery, ContentBlock, ProviderEvent, ProviderOptions, QueryInput } from './types.js';
 
 /**
  * Mock provider for testing. Returns canned responses.
@@ -32,7 +33,7 @@ export class MockProvider implements AgentProvider {
 
         // Process initial prompt
         yield { type: 'activity' };
-        yield { type: 'result', text: responseFactory(input.prompt) };
+        yield { type: 'result', text: responseFactory(promptToText(input.prompt)) };
 
         // Process any pushed follow-ups
         while (!ended && !aborted) {
@@ -57,8 +58,8 @@ export class MockProvider implements AgentProvider {
     };
 
     return {
-      push(message: string) {
-        pending.push(message);
+      push(message: string | ContentBlock[]) {
+        pending.push(promptToText(message));
         waiting?.();
       },
       end() {

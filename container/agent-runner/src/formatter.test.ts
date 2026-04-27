@@ -10,10 +10,13 @@
  * stable for the numeric parts we assert on (hour, minute, year).
  */
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 import { initTestSessionDb, closeSessionDb, getInboundDb } from './db/connection.js';
 import { getPendingMessages } from './db/messages-in.js';
-import { formatMessages, stripInternalTags } from './formatter.js';
+import { formatMessages, formatMessagesForPrompt, stripInternalTags } from './formatter.js';
 import { TIMEZONE } from './timezone.js';
 
 beforeEach(() => {
@@ -163,5 +166,128 @@ describe('stripInternalTags', () => {
     expect(stripInternalTags('<internal>thinking</internal>The answer is 42')).toBe(
       'The answer is 42',
     );
+  });
+});
+
+describe('image attachment inlining (formatMessagesForPrompt)', () => {
+  // 1x1 PNG — minimal valid file for the magic-byte sniffer
+  const PNG_1X1 = Buffer.from(
+    '89504E470D0A1A0A0000000D49484452000000010000000108060000001F15C4890000000D' +
+      '49444154789C6300010000000500010D0A2DB40000000049454E44AE426082',
+    'hex',
+  );
+
+  let tmpRoot: string;
+  const originalRoot = process.env.WORKSPACE_ROOT;
+
+  beforeEach(() => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'fmt-images-'));
+    fs.mkdirSync(path.join(tmpRoot, 'inbox'), { recursive: true });
+    process.env.WORKSPACE_ROOT = tmpRoot;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    if (originalRoot === undefined) delete process.env.WORKSPACE_ROOT;
+    else process.env.WORKSPACE_ROOT = originalRoot;
+  });
+
+  it('extracts an image attachment as a base64 content block and emits a brief placeholder', () => {
+    fs.writeFileSync(path.join(tmpRoot, 'inbox', 'pic.png'), PNG_1X1);
+    getInboundDb()
+      .prepare(
+        `INSERT INTO messages_in (id, kind, timestamp, status, content)
+         VALUES (?, ?, ?, 'pending', ?)`,
+      )
+      .run(
+        'm1',
+        'chat-sdk',
+        new Date().toISOString(),
+        JSON.stringify({
+          sender: 'Johnny',
+          text: 'check this out',
+          attachments: [{ type: 'image', name: 'pic.png', localPath: 'inbox/pic.png' }],
+        }),
+      );
+
+    const result = formatMessagesForPrompt(getPendingMessages());
+
+    expect(result.images).toHaveLength(1);
+    expect(result.images[0].mediaType).toBe('image/png');
+    expect(result.images[0].data).toBe(PNG_1X1.toString('base64'));
+    // Placeholder kept so the model can correlate the rendered image with
+    // its message context; the verbose path marker is gone.
+    expect(result.text).toContain('[image: pic.png]');
+    expect(result.text).not.toContain('saved to /workspace/');
+  });
+
+  it('falls back to the path marker when the image file is missing', () => {
+    getInboundDb()
+      .prepare(
+        `INSERT INTO messages_in (id, kind, timestamp, status, content)
+         VALUES (?, ?, ?, 'pending', ?)`,
+      )
+      .run(
+        'm1',
+        'chat-sdk',
+        new Date().toISOString(),
+        JSON.stringify({
+          sender: 'Johnny',
+          text: 'lost image',
+          attachments: [{ type: 'image', name: 'gone.png', localPath: 'inbox/gone.png' }],
+        }),
+      );
+
+    const result = formatMessagesForPrompt(getPendingMessages());
+
+    expect(result.images).toHaveLength(0);
+    expect(result.text).toContain('saved to /workspace/inbox/gone.png');
+  });
+
+  it('leaves non-image attachments as path markers regardless of sink', () => {
+    fs.writeFileSync(path.join(tmpRoot, 'inbox', 'doc.pdf'), '%PDF-1.7\n');
+    getInboundDb()
+      .prepare(
+        `INSERT INTO messages_in (id, kind, timestamp, status, content)
+         VALUES (?, ?, ?, 'pending', ?)`,
+      )
+      .run(
+        'm1',
+        'chat-sdk',
+        new Date().toISOString(),
+        JSON.stringify({
+          sender: 'Johnny',
+          text: 'see attached',
+          attachments: [{ type: 'document', name: 'doc.pdf', localPath: 'inbox/doc.pdf' }],
+        }),
+      );
+
+    const result = formatMessagesForPrompt(getPendingMessages());
+
+    expect(result.images).toHaveLength(0);
+    expect(result.text).toContain('saved to /workspace/inbox/doc.pdf');
+  });
+
+  it('legacy formatMessages (no sink) keeps the verbose path marker for images', () => {
+    fs.writeFileSync(path.join(tmpRoot, 'inbox', 'pic.png'), PNG_1X1);
+    getInboundDb()
+      .prepare(
+        `INSERT INTO messages_in (id, kind, timestamp, status, content)
+         VALUES (?, ?, ?, 'pending', ?)`,
+      )
+      .run(
+        'm1',
+        'chat-sdk',
+        new Date().toISOString(),
+        JSON.stringify({
+          sender: 'Johnny',
+          text: 'pic',
+          attachments: [{ type: 'image', name: 'pic.png', localPath: 'inbox/pic.png' }],
+        }),
+      );
+
+    const text = formatMessages(getPendingMessages());
+
+    expect(text).toContain('saved to /workspace/inbox/pic.png');
   });
 });

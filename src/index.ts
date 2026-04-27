@@ -15,6 +15,9 @@ import { startActiveDeliveryPoll, startSweepDeliveryPoll, setDeliveryAdapter, st
 import { startHostSweep, stopHostSweep } from './host-sweep.js';
 import { routeInbound } from './router.js';
 import { log } from './log.js';
+import { getActiveSessions } from './db/sessions.js';
+import { openOutboundDb } from './session-manager.js';
+import { backfillReactionStateFromOutDb } from './status-reactions.js';
 
 // Response + shutdown registries live in response-registry.ts to break the
 // circular import cycle: src/index.ts imports src/modules/index.js for side
@@ -31,6 +34,35 @@ import {
 } from './response-registry.js';
 export { registerResponseHandler, onShutdown };
 export type { ResponsePayload, ResponseHandler };
+
+/**
+ * Walk every active session's outbound.db once and pre-populate
+ * `host_reaction_state` with 'completed' entries for each historic
+ * processing_ack row. Without this, the first sweep after migration 014
+ * would walk a large backlog of completed acks with no state record and
+ * re-fire 👍 across all of them — visible to the user as a reaction
+ * storm. Errors per-session are logged and skipped so one broken DB
+ * file doesn't block startup.
+ */
+async function backfillReactionStateOnStartup(): Promise<void> {
+  const sessions = getActiveSessions();
+  if (sessions.length === 0) return;
+  let backfilled = 0;
+  for (const session of sessions) {
+    try {
+      const outDb = openOutboundDb(session.agent_group_id, session.id);
+      try {
+        backfillReactionStateFromOutDb(outDb);
+        backfilled++;
+      } finally {
+        outDb.close();
+      }
+    } catch (err) {
+      log.debug('reaction-state backfill skipped session', { sessionId: session.id, err });
+    }
+  }
+  log.info('Backfilled reaction state', { sessions: backfilled });
+}
 
 async function dispatchResponse(payload: ResponsePayload): Promise<void> {
   for (const handler of getResponseHandlers()) {
@@ -66,6 +98,12 @@ async function main(): Promise<void> {
 
   // 1b. One-time filesystem cutover — idempotent, no-op after first run.
   migrateGroupsToClaudeLocal();
+
+  // 1c. Backfill host_reaction_state from each session's outbound.db so
+  //     the next sweep doesn't re-storm 👍 reactions across the historic
+  //     processing_ack backlog after migration 014. Idempotent — entries
+  //     are insert-or-ignored, so safe on every startup.
+  await backfillReactionStateOnStartup();
 
   // 2. Container runtime
   ensureContainerRuntimeRunning();

@@ -6,7 +6,9 @@
  */
 import path from 'path';
 
+import { backfillContainerConfigs } from './backfill-container-configs.js';
 import { DATA_DIR } from './config.js';
+import { enforceStartupBackoff, resetCircuitBreaker } from './circuit-breaker.js';
 import { migrateGroupsToClaudeLocal } from './claude-md-compose.js';
 import { initDb } from './db/connection.js';
 import { runMigrations } from './db/migrations/index.js';
@@ -18,6 +20,7 @@ import { log } from './log.js';
 import { getActiveSessions } from './db/sessions.js';
 import { openOutboundDb } from './session-manager.js';
 import { backfillReactionStateFromOutDb } from './status-reactions.js';
+import { enforceUpgradeTripwire } from './upgrade-state.js';
 
 // Response + shutdown registries live in response-registry.ts to break the
 // circular import cycle: src/index.ts imports src/modules/index.js for side
@@ -84,11 +87,24 @@ import './channels/index.js';
 // append registry-based modules. Imported for side effects (registrations).
 import './modules/index.js';
 
+// CLI command barrel — populates the `ncl` registry before the CLI server
+// accepts connections.
+import './cli/commands/index.js';
+import './cli/delivery-action.js';
+import { startCliServer, stopCliServer } from './cli/socket-server.js';
+
 import type { ChannelAdapter, ChannelSetup } from './channels/adapter.js';
 import { initChannelAdapters, teardownChannelAdapters, getChannelAdapter } from './channels/channel-registry.js';
 
 async function main(): Promise<void> {
   log.info('NanoClaw starting');
+
+  // 0. Circuit breaker — backoff on rapid restarts
+  await enforceStartupBackoff();
+
+  // 0.5 Upgrade tripwire — refuse to start if this install was updated
+  // outside the sanctioned path (raw `git pull` instead of /update-nanoclaw).
+  enforceUpgradeTripwire();
 
   // 1. Init central DB
   const dbPath = path.join(DATA_DIR, 'v2.db');
@@ -96,7 +112,11 @@ async function main(): Promise<void> {
   runMigrations(db);
   log.info('Central DB ready', { path: dbPath });
 
-  // 1b. One-time filesystem cutover — idempotent, no-op after first run.
+  // 1b. Backfill container_configs from legacy container.json files.
+  // Idempotent — skips groups that already have a config row.
+  backfillContainerConfigs();
+
+  // 1c. One-time filesystem cutover — idempotent, no-op after first run.
   migrateGroupsToClaudeLocal();
 
   // 1c. Backfill host_reaction_state from each session's outbound.db so
@@ -197,6 +217,9 @@ async function main(): Promise<void> {
   startHostSweep();
   log.info('Host sweep started');
 
+  // 7. Start the `ncl` CLI socket server (data/ncl.sock).
+  await startCliServer();
+
   log.info('NanoClaw running');
 }
 
@@ -212,8 +235,16 @@ async function shutdown(signal: string): Promise<void> {
   }
   stopDeliveryPolls();
   stopHostSweep();
-  await teardownChannelAdapters();
-  process.exit(0);
+  await stopCliServer();
+  try {
+    await teardownChannelAdapters();
+  } finally {
+    // Always reset on graceful shutdown — even if teardown threw, we got here
+    // via SIGTERM/SIGINT, not a crash, so the next start shouldn't be counted
+    // as one.
+    resetCircuitBreaker();
+    process.exit(0);
+  }
 }
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));

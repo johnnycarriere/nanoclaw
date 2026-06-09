@@ -23,7 +23,7 @@
  */
 import type Database from 'better-sqlite3';
 
-import { getMessageForRetry, retryWithBackoff, markMessageFailed, openOutboundDbRW } from './db/session-db.js';
+import { getMessageForRetry, retryWithBackoff, markMessageFailed, openOutboundDbRw } from './db/session-db.js';
 import { log } from './log.js';
 
 const MAX_TRIES = 5;
@@ -66,7 +66,7 @@ function clearProcessingAck(outDbPath: string, messageId: string): void {
   // Narrow sanctioned host-write to a container-owned table. See header.
   // Open RW briefly so we don't hold a writer through the whole sweep, and
   // so the host's normal outbound reader can stay readonly.
-  const db = openOutboundDbRW(outDbPath);
+  const db = openOutboundDbRw(outDbPath);
   try {
     db.prepare('DELETE FROM processing_ack WHERE message_id = ?').run(messageId);
   } finally {

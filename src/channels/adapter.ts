@@ -135,6 +135,7 @@ export interface ChannelAdapter {
   // Optional
   setTyping?(platformId: string, threadId: string | null): Promise<void>;
   syncConversations?(): Promise<ConversationInfo[]>;
+  resolveChannelName?(platformId: string): Promise<string | null>;
 
   /**
    * Host-side emoji reaction. Used for status signalling on inbound

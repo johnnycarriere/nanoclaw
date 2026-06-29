@@ -179,6 +179,16 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       serialized.senderName = name;
     }
 
+    // Telegram Mini App submissions (Telegram.WebApp.sendData) arrive as a
+    // message with no text but a web_app_data payload. Surface that payload as
+    // the message text so it routes through the normal pipeline as if the user
+    // typed it. No-op for every other platform/message (no web_app_data).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const webAppData = (message.raw as Record<string, any> | undefined)?.web_app_data;
+    if (webAppData && typeof webAppData.data === 'string' && webAppData.data && !serialized.text) {
+      serialized.text = webAppData.data;
+    }
+
     // Drop raw to save DB space (can be very large)
     serialized.raw = undefined;
 
@@ -272,6 +282,18 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
 
       // Handle button clicks (ask_user_question)
       chat.onAction(async (event) => {
+        // ncs: (send_card action) — re-inject value as inbound message
+        if (event.actionId === 'ncs') {
+          const value = event.value ?? '';
+          const channelId = adapter.channelIdFromThreadId(event.threadId);
+          await setupConfig.onInbound(channelId, event.threadId, {
+            kind: 'chat-sdk',
+            id: '',
+            timestamp: new Date().toISOString(),
+            content: { text: value, author: event.user ? { userId: event.user.userId } : undefined },
+          });
+          return;
+        }
         if (!event.actionId.startsWith('ncq:')) return;
         const parts = event.actionId.split(':');
         if (parts.length < 3) return;
@@ -421,9 +443,11 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
         return result?.id;
       }
 
-      // Display card (send_card MCP tool) — returns immediately, no callback flow.
-      // Non-URL actions are dropped: send_card's contract is fire-and-forget, so a
-      // callback button would have nowhere to land. URL actions render as link buttons.
+      // Display card (send_card MCP tool). URL actions render as link buttons;
+      // non-URL actions render as callback buttons whose value is re-injected as
+      // an inbound message on click (the `ncs` handler in onAction above) — this
+      // is what lets send_card buttons (e.g. the bible "+perspective" picks)
+      // round-trip back to the agent.
       if (content.type === 'card' && content.card && typeof content.card === 'object') {
         const cardSpec = content.card as Record<string, unknown>;
         const title = (cardSpec.title as string) || '';
@@ -447,20 +471,21 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
           }
         }
         if (Array.isArray(cardSpec.actions)) {
-          const linkButtons = (cardSpec.actions as Array<Record<string, unknown>>)
-            .filter((a) => typeof a.url === 'string' && a.url && typeof a.label === 'string' && a.label)
+          const allButtons = (cardSpec.actions as Array<Record<string, unknown>>)
+            .filter((a) => typeof a.label === 'string' && a.label)
             .map((a) => {
               const style = a.style;
               const safeStyle: 'primary' | 'danger' | 'default' | undefined =
                 style === 'primary' || style === 'danger' || style === 'default' ? style : undefined;
-              return LinkButton({
-                label: a.label as string,
-                url: a.url as string,
-                style: safeStyle,
-              });
+              if (typeof a.url === 'string' && a.url) {
+                return LinkButton({ label: a.label as string, url: a.url, style: safeStyle });
+              }
+              // Non-URL action: re-inject value as inbound message on click (ncs: prefix)
+              const value = typeof a.value === 'string' ? a.value : (a.label as string);
+              return Button({ id: 'ncs', label: a.label as string, value });
             });
-          if (linkButtons.length > 0) {
-            cardChildren.push(Actions(linkButtons));
+          if (allButtons.length > 0) {
+            cardChildren.push(Actions(allButtons));
           }
         }
 

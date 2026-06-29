@@ -13,7 +13,7 @@ import { upsertUser } from '../modules/permissions/db/users.js';
 import { createChatSdkBridge, type ReplyContext } from './chat-sdk-bridge.js';
 import { sanitizeTelegramLegacyMarkdown } from './telegram-markdown-sanitize.js';
 import { registerChannelAdapter } from './channel-registry.js';
-import type { ChannelAdapter, ChannelSetup, InboundMessage } from './adapter.js';
+import type { ChannelAdapter, ChannelSetup, InboundMessage, OutboundMessage } from './adapter.js';
 import { tryConsume } from './telegram-pairing.js';
 import { maybeTranscribeVoice } from './telegram-voice-transcribe.js';
 
@@ -108,6 +108,49 @@ async function sendPairingConfirmation(token: string, platformId: string): Promi
     }
   } catch (err) {
     log.warn('Telegram pairing confirmation failed', { err });
+  }
+}
+
+/**
+ * Send a Telegram reply-keyboard Mini App button via the Bot API. The Chat SDK
+ * only renders inline callback/url buttons — it has no `web_app` button type —
+ * and `Telegram.WebApp.sendData()` (the picker's round-trip back to the bot)
+ * only works from a *reply-keyboard* web_app button in a private chat. So a
+ * `send_card` action carrying a `webAppUrl` is delivered here directly rather
+ * than through the generic bridge. Returns the platform message id, if any.
+ */
+async function sendWebAppButton(
+  token: string,
+  platformId: string,
+  text: string,
+  label: string,
+  url: string,
+): Promise<string | undefined> {
+  const chatId = platformId.split(':').slice(1).join(':');
+  if (!chatId) return undefined;
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        reply_markup: {
+          keyboard: [[{ text: label, web_app: { url } }]],
+          resize_keyboard: true,
+          one_time_keyboard: true,
+        },
+      }),
+    });
+    const json = (await res.json()) as { ok: boolean; result?: { message_id?: number } };
+    if (!json.ok) {
+      log.warn('Telegram web_app button send non-OK', { status: res.status });
+      return undefined;
+    }
+    return json.result?.message_id != null ? String(json.result.message_id) : undefined;
+  } catch (err) {
+    log.error('Telegram web_app button send failed', { err });
+    return undefined;
   }
 }
 
@@ -217,6 +260,27 @@ registerChannelAdapter('telegram', {
 
     const wrapped: ChannelAdapter = {
       ...bridge,
+      // Intercept send_card payloads whose action carries a `webAppUrl` and
+      // render them as a Telegram reply-keyboard Mini App button (see
+      // sendWebAppButton). Everything else delegates to the bridge.
+      async deliver(platformId: string, threadId: string | null, message: OutboundMessage) {
+        const content = message.content as Record<string, unknown> | undefined;
+        if (content && content.type === 'card' && content.card && typeof content.card === 'object') {
+          const card = content.card as Record<string, unknown>;
+          const actions = Array.isArray(card.actions) ? (card.actions as Array<Record<string, unknown>>) : [];
+          const webApp = actions.find((a) => typeof a.webAppUrl === 'string' && a.webAppUrl);
+          if (webApp) {
+            const label = typeof webApp.label === 'string' && webApp.label ? webApp.label : 'Open';
+            const text =
+              (typeof card.title === 'string' && card.title) ||
+              (typeof card.description === 'string' && card.description) ||
+              (typeof content.fallbackText === 'string' && content.fallbackText) ||
+              'Open:';
+            return sendWebAppButton(token, platformId, text, label, webApp.webAppUrl as string);
+          }
+        }
+        return bridge.deliver(platformId, threadId, message);
+      },
       async setup(hostConfig: ChannelSetup) {
         const pairing = createPairingInterceptor(botUsernamePromise, hostConfig.onInbound, token);
         // Pre-pairing wrapper: (1) transcribe voice notes in place, so the

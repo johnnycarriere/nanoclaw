@@ -125,7 +125,7 @@ describe('createChatSdkBridge.deliver — display cards (send_card)', () => {
     expect(msg.card).toBeDefined();
   });
 
-  it('drops actions without url (send_card is fire-and-forget; non-URL buttons would have nowhere to land)', async () => {
+  it('renders non-URL actions as callback buttons (ncs re-injection round-trip)', async () => {
     const { calls, postMessage } = makePostCapture();
     const bridge = createChatSdkBridge({
       adapter: stubAdapter({ postMessage }),
@@ -143,13 +143,17 @@ describe('createChatSdkBridge.deliver — display cards (send_card)', () => {
       },
     });
     expect(calls).toHaveLength(1);
-    // Cast through the public Card shape to read the children we set
-    const msg = calls[0].message as { card?: { children?: Array<{ type?: string }> } };
-    const childTypes = (msg.card?.children ?? []).map((c) => c.type);
-    expect(childTypes).not.toContain('actions');
+    const msg = calls[0].message as {
+      card?: { children?: Array<{ type?: string; children?: Array<{ type?: string }> }> };
+    };
+    const actionsRow = msg.card?.children?.find((c) => c.type === 'actions');
+    expect(actionsRow).toBeDefined();
+    const buttons = actionsRow?.children ?? [];
+    expect(buttons).toHaveLength(2);
+    expect(buttons.every((b) => b.type === 'button')).toBe(true);
   });
 
-  it('renders url actions as link buttons inside an Actions row', async () => {
+  it('renders url actions as link buttons and non-URL actions as callback buttons', async () => {
     const { calls, postMessage } = makePostCapture();
     const bridge = createChatSdkBridge({
       adapter: stubAdapter({ postMessage }),
@@ -171,9 +175,10 @@ describe('createChatSdkBridge.deliver — display cards (send_card)', () => {
     const actionsRow = msg.card?.children?.find((c) => c.type === 'actions');
     expect(actionsRow).toBeDefined();
     const buttons = actionsRow?.children ?? [];
-    expect(buttons).toHaveLength(1);
+    expect(buttons).toHaveLength(2);
     expect(buttons[0].type).toBe('link-button');
     expect(buttons[0].url).toBe('https://example.com');
+    expect(buttons[1].type).toBe('button');
   });
 
   it('skips delivery when the card has neither title nor body content', async () => {

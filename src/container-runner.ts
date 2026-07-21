@@ -502,11 +502,6 @@ async function buildContainerArgs(
   const onecliNet = onecliNetworkArgs();
   if (onecliNet.length > 0) {
     args.push(...onecliNet);
-    for (let i = 0; i < args.length; i++) {
-      if (args[i] === '-e' && typeof args[i + 1] === 'string' && args[i + 1].includes('host.docker.internal')) {
-        args[i + 1] = args[i + 1].replace(/host\.docker\.internal/g, 'onecli-app-1');
-      }
-    }
   }
 
   // User mapping
@@ -543,6 +538,17 @@ async function buildContainerArgs(
     throw new Error('OneCLI gateway not applied — refusing to spawn container without credentials');
   }
   log.info('OneCLI gateway applied', { containerName });
+
+  // Rewrite the gateway-injected proxy env vars to the in-network hostname.
+  // Must run after applyContainerConfig — that's what adds the HTTPS_PROXY/
+  // HTTP_PROXY entries pointing at host.docker.internal.
+  if (onecliNet.length > 0) {
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '-e' && typeof args[i + 1] === 'string' && args[i + 1].includes('host.docker.internal')) {
+        args[i + 1] = args[i + 1].replace(/host\.docker\.internal/g, 'onecli-app-1');
+      }
+    }
+  }
 
   // Override entrypoint: run v2 entry point directly via Bun (no tsc, no stdin).
   args.push('--entrypoint', 'bash');

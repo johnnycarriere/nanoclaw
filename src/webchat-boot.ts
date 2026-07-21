@@ -24,9 +24,8 @@ async function installAgentGroupLiveRefresh(): Promise<void> {
   try {
     const { registerDeliveryAction, reenterGuardedDeliveryAction } = await import('./delivery.js');
     const { registerApprovalHandler, getApprovalHandler } = await import('./modules/approvals/primitive.js');
-    const { createAgent, validateCreateAgent, requestCreateAgentHold } = await import(
-      './modules/agent-to-agent/create-agent.js'
-    );
+    const { createAgent, validateCreateAgent, requestCreateAgentHold } =
+      await import('./modules/agent-to-agent/create-agent.js');
     const { agentsCreate } = await import('./modules/agent-to-agent/guard.js');
     const { notifyAgent } = await import('./modules/approvals/index.js');
 

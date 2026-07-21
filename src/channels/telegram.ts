@@ -13,9 +13,23 @@ import { upsertUser } from '../modules/permissions/db/users.js';
 import { createChatSdkBridge, type ReplyContext } from './chat-sdk-bridge.js';
 import { sanitizeTelegramLegacyMarkdown } from './telegram-markdown-sanitize.js';
 import { registerChannelAdapter } from './channel-registry.js';
-import type { ChannelAdapter, ChannelSetup, InboundMessage, OutboundMessage } from './adapter.js';
+import type { ChannelAdapter, ChannelDefaults, ChannelSetup, InboundMessage, OutboundMessage } from './adapter.js';
 import { tryConsume } from './telegram-pairing.js';
 import { maybeTranscribeVoice } from './telegram-voice-transcribe.js';
+
+/**
+ * Dedicated bot identity, non-threaded platform (supportsThreads:false), so
+ * group engagement can never be sticky-per-thread — 'mention' keeps a group
+ * wiring from staying engaged forever in the single shared session.
+ *
+ * FORK: unknownSenderPolicy is 'strict' (upstream declares 'request_approval')
+ * to match this install's router-level strict hardcode.
+ */
+const TELEGRAM_DEFAULTS: ChannelDefaults = {
+  dm: { engageMode: 'pattern', engagePattern: '.', threads: false, unknownSenderPolicy: 'strict' },
+  group: { engageMode: 'mention', threads: false, unknownSenderPolicy: 'strict' },
+  mentions: 'platform',
+};
 
 /**
  * Retry a one-shot operation that can fail on transient network errors at
@@ -253,13 +267,30 @@ registerChannelAdapter('telegram', {
       concurrency: 'concurrent',
       extractReplyContext,
       supportsThreads: false,
+      defaults: TELEGRAM_DEFAULTS,
       transformOutboundText: sanitizeTelegramLegacyMarkdown,
+      maxTextLength: 4000,
     });
 
     const botUsernamePromise = fetchBotUsername(token);
 
     const wrapped: ChannelAdapter = {
       ...bridge,
+      resolveChannelName: async (platformId: string) => {
+        const chatId = platformId.split(':').slice(1).join(':');
+        if (!chatId) return null;
+        try {
+          const res = await fetch(`https://api.telegram.org/bot${token}/getChat`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId }),
+          });
+          const data = (await res.json()) as { ok?: boolean; result?: { title?: string } };
+          return data.ok ? (data.result?.title ?? null) : null;
+        } catch {
+          return null;
+        }
+      },
       // Intercept send_card payloads whose action carries a `webAppUrl` and
       // render them as a Telegram reply-keyboard Mini App button (see
       // sendWebAppButton). Everything else delegates to the bridge.
@@ -311,4 +342,5 @@ registerChannelAdapter('telegram', {
     };
     return wrapped;
   },
+  defaults: TELEGRAM_DEFAULTS,
 });

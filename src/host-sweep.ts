@@ -153,7 +153,14 @@ async function sweep(): Promise<void> {
   try {
     const sessions = getActiveSessions();
     for (const session of sessions) {
-      await sweepSession(session);
+      // Isolate failures per session — a throw here must not skip the
+      // remaining sessions or this session's later steps on the next tick
+      // (stuck-container kills and due-message wakes ride on this loop).
+      try {
+        await sweepSession(session);
+      } catch (err) {
+        log.error('Host sweep error for session', { sessionId: session.id, err });
+      }
     }
   } catch (err) {
     log.error('Host sweep error', { err });

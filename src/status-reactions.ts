@@ -49,24 +49,43 @@ interface ReactionStateRow {
  * Called after syncProcessingAcks() in the sweep loop so we're looking at
  * the current, canonical state.
  */
+// processing_ack grows unboundedly (completed rows are never deleted), so an
+// IN clause with one placeholder per row eventually exceeds SQLite's bind
+// limit (SQLITE_MAX_VARIABLE_NUMBER, 32766 in better-sqlite3) and every query
+// throws "too many SQL variables" — batch the lookups well under the limit.
+const IN_CLAUSE_BATCH = 900;
+
+function selectByIdsChunked<T>(db: Database.Database, sqlTemplate: (placeholders: string) => string, ids: string[]): T[] {
+  const out: T[] = [];
+  for (let i = 0; i < ids.length; i += IN_CLAUSE_BATCH) {
+    const chunk = ids.slice(i, i + IN_CLAUSE_BATCH);
+    const placeholders = chunk.map(() => '?').join(',');
+    out.push(...(db.prepare(sqlTemplate(placeholders)).all(...chunk) as T[]));
+  }
+  return out;
+}
+
 export async function emitStatusReactions(inDb: Database.Database, outDb: Database.Database): Promise<void> {
   const rows = outDb.prepare('SELECT message_id, status FROM processing_ack').all() as AckRow[];
   if (rows.length === 0) return;
 
   const ids = rows.map((r) => r.message_id);
-  const placeholders = ids.map(() => '?').join(',');
 
-  // Look up the matching inbound rows in one go.
-  const inRows = inDb
-    .prepare(`SELECT id, channel_type, platform_id FROM messages_in WHERE id IN (${placeholders})`)
-    .all(...ids) as InMsgRow[];
+  // Look up the matching inbound rows.
+  const inRows = selectByIdsChunked<InMsgRow>(
+    inDb,
+    (ph) => `SELECT id, channel_type, platform_id FROM messages_in WHERE id IN (${ph})`,
+    ids,
+  );
   const inById = new Map(inRows.map((r) => [r.id, r]));
 
   // Pull the durable "already emitted" record for these same ids.
   const centralDb = getDb();
-  const stateRows = centralDb
-    .prepare(`SELECT message_id, last_emitted FROM host_reaction_state WHERE message_id IN (${placeholders})`)
-    .all(...ids) as ReactionStateRow[];
+  const stateRows = selectByIdsChunked<ReactionStateRow>(
+    centralDb,
+    (ph) => `SELECT message_id, last_emitted FROM host_reaction_state WHERE message_id IN (${ph})`,
+    ids,
+  );
   const stateById = new Map(stateRows.map((r) => [r.message_id, r.last_emitted]));
 
   const upsertStmt = centralDb.prepare(

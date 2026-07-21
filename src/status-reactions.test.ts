@@ -191,6 +191,33 @@ describe('emitStatusReactions — idempotency', () => {
     expect(state?.last_emitted).toBe('processing');
   });
 
+  it('survives processing_ack tables larger than the SQLite bind-variable limit', async () => {
+    // Regression: a long-lived session accumulated 33k+ completed acks and
+    // the single IN (...) query with one placeholder per row blew past
+    // SQLITE_MAX_VARIABLE_NUMBER (32766), throwing "too many SQL variables"
+    // on every sweep tick — which killed the whole sweep loop, including
+    // stuck-container detection. Seed past the limit and assert the emitter
+    // both runs and still fires correctly for a fresh completion.
+    const ids = Array.from({ length: 33000 }, (_, i) => `1644976441:${i}:ag-1`);
+    inDb.exec('BEGIN');
+    seedInbound(ids);
+    inDb.exec('COMMIT');
+    outDb.exec('BEGIN');
+    for (const id of ids) seedAck(id, 'completed');
+    outDb.exec('COMMIT');
+    backfillReactionStateFromOutDb(outDb);
+
+    await expect(emitStatusReactions(inDb, outDb)).resolves.toBeUndefined();
+    expect(mockAdapter.postReaction).toHaveBeenCalledTimes(0);
+
+    // A brand-new completion among the huge backlog still fires exactly once.
+    seedInbound(['1644976441:99999:ag-1']);
+    seedAck('1644976441:99999:ag-1', 'completed');
+    await emitStatusReactions(inDb, outDb);
+    expect(mockAdapter.postReaction).toHaveBeenCalledTimes(1);
+    expect(mockAdapter.postReaction).toHaveBeenCalledWith('telegram:123', '99999', '👍');
+  });
+
   it('upgrades processing → completed without re-firing 👨‍💻', async () => {
     seedInbound(['1644976441:500:ag-1']);
     seedAck('1644976441:500:ag-1', 'processing');

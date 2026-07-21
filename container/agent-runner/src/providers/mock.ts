@@ -1,4 +1,5 @@
 import { registerProvider } from './provider-registry.js';
+import type { MemorySessionHookRegistration } from '../memory/session-hook.js';
 import { promptToText } from './types.js';
 import type { AgentProvider, AgentQuery, ContentBlock, ProviderEvent, ProviderOptions, QueryInput } from './types.js';
 
@@ -14,6 +15,8 @@ export class MockProvider implements AgentProvider {
   constructor(_options: ProviderOptions = {}, responseFactory?: (prompt: string) => string) {
     this.responseFactory = responseFactory ?? ((prompt) => `Mock response to: ${prompt.slice(0, 100)}`);
   }
+
+  registerMemorySessionHook(_hook: MemorySessionHookRegistration): void {}
 
   isSessionInvalid(_err: unknown): boolean {
     return false;

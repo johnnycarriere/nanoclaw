@@ -567,15 +567,11 @@ describe('ensureUserWebchatWirings', () => {
     healWebchatWiringsForUser('web:basic:alice', 'Alice');
 
     expect(getMessagingGroupByPlatform(WEB_CHANNEL_TYPE, WEB_LOBBY_PLATFORM_ID)).toBeDefined();
-    expect(
-      getMessagingGroupByPlatform(WEB_CHANNEL_TYPE, `inbox:${encodeUserSuffix('web:basic:alice')}`),
-    ).toBeDefined();
+    expect(getMessagingGroupByPlatform(WEB_CHANNEL_TYPE, `inbox:${encodeUserSuffix('web:basic:alice')}`)).toBeDefined();
     expect(
       getMessagingGroupByPlatform(WEB_CHANNEL_TYPE, `dm:sarah:${encodeUserSuffix('web:basic:alice')}`),
     ).toBeDefined();
-    expect(
-      getMessagingGroupByPlatform(WEB_CHANNEL_TYPE, `inbox:${encodeUserSuffix('web:basic:bob')}`),
-    ).toBeUndefined();
+    expect(getMessagingGroupByPlatform(WEB_CHANNEL_TYPE, `inbox:${encodeUserSuffix('web:basic:bob')}`)).toBeUndefined();
   });
 
   it('healWebchatWiringsForUser is a no-op when webchat is disabled', () => {

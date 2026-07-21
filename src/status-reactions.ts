@@ -55,7 +55,11 @@ interface ReactionStateRow {
 // throws "too many SQL variables" — batch the lookups well under the limit.
 const IN_CLAUSE_BATCH = 900;
 
-function selectByIdsChunked<T>(db: Database.Database, sqlTemplate: (placeholders: string) => string, ids: string[]): T[] {
+function selectByIdsChunked<T>(
+  db: Database.Database,
+  sqlTemplate: (placeholders: string) => string,
+  ids: string[],
+): T[] {
   const out: T[] = [];
   for (let i = 0; i < ids.length; i += IN_CLAUSE_BATCH) {
     const chunk = ids.slice(i, i + IN_CLAUSE_BATCH);

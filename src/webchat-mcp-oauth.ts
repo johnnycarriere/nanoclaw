@@ -102,10 +102,7 @@ function verifyJwt(token: string, secret: string, iss: string, aud: string): Jwt
   const [headerB64, payloadB64, sig] = parts;
   if (!headerB64 || !payloadB64 || !sig) return null;
 
-  const expected = crypto
-    .createHmac('sha256', secret)
-    .update(`${headerB64}.${payloadB64}`)
-    .digest('base64url');
+  const expected = crypto.createHmac('sha256', secret).update(`${headerB64}.${payloadB64}`).digest('base64url');
   if (sig.length !== expected.length) return null;
   if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
 
@@ -224,9 +221,7 @@ function rowToClient(row: {
     client_name: row.client_name ?? undefined,
     token_endpoint_auth_method: row.token_endpoint_auth_method ?? undefined,
     grant_types: row.grant_types_json ? (JSON.parse(row.grant_types_json) as string[]) : undefined,
-    response_types: row.response_types_json
-      ? (JSON.parse(row.response_types_json) as string[])
-      : undefined,
+    response_types: row.response_types_json ? (JSON.parse(row.response_types_json) as string[]) : undefined,
     scope: row.scope ?? undefined,
   };
 }
@@ -383,9 +378,9 @@ export function createWebchatMcpOAuthBackend(config: WebchatMcpOAuthConfig) {
     async challengeForAuthorizationCode(_client: McpOAuthClientRecord, code: string): Promise<string> {
       purgeExpiredMcpCodes();
       const db = getAuthDbInternal();
-      const row = db
-        .prepare(`SELECT code_challenge FROM web_mcp_oauth_codes WHERE code = ?`)
-        .get(code) as { code_challenge: string } | undefined;
+      const row = db.prepare(`SELECT code_challenge FROM web_mcp_oauth_codes WHERE code = ?`).get(code) as
+        | { code_challenge: string }
+        | undefined;
       if (!row) throw new Error('Invalid authorization code');
       return row.code_challenge;
     },

@@ -266,8 +266,11 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
         processingIds,
         config.providerName,
         config.provider.onExchangeComplete?.bind(config.provider),
-        prompt,
+        // Archive/nudge bookkeeping wants the text form; the provider query
+        // above still receives the full prompt (with image content blocks).
+        formatted.text,
         continuation,
+        config.signal,
       );
       if (result.continuation && result.continuation !== continuation) {
         continuation = result.continuation;
@@ -389,6 +392,7 @@ export async function processQuery(
   onExchangeComplete: ((exchange: ProviderExchange) => void) | undefined,
   initialPrompt: string,
   initialContinuation: string | undefined,
+  signal?: AbortSignal,
 ): Promise<QueryResult> {
   let queryContinuation: string | undefined;
   let done = false;
@@ -415,6 +419,15 @@ export async function processQuery(
   let endedForCommand = false;
   let corruptionStreak = 0;
   const pollHandle = setInterval(() => {
+    // Stop-signal honored here too: without this an aborted loop (tests, or
+    // a future host-driven shutdown) leaves this interval alive, silently
+    // claiming pending messages meant for a later query.
+    if (signal?.aborted) {
+      done = true;
+      clearInterval(pollHandle);
+      query.abort();
+      return;
+    }
     if (done || pollInFlight || endedForCommand) return;
     pollInFlight = true;
 

@@ -122,8 +122,6 @@ describe('loadWebAdapterAuthConfig', () => {
     vi.mocked(log.warn).mockClear();
     const cfg = loadWebAdapterAuthConfig();
     expect(cfg?.public?.oidcEnabled).toBe(true);
-    expect(vi.mocked(log.warn)).toHaveBeenCalledWith(
-      expect.stringContaining('OIDC allowlist is empty'),
-    );
+    expect(vi.mocked(log.warn)).toHaveBeenCalledWith(expect.stringContaining('OIDC allowlist is empty'));
   });
 });

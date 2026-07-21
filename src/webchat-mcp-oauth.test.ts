@@ -66,13 +66,9 @@ async function mintCode(opts?: { challenge?: string; redirectUri?: string }) {
     redirect_uris: [REDIRECT],
     token_endpoint_auth_method: 'none',
   });
-  const session = createSession(
-    { userId: 'web:basic:alice', displayName: 'Alice', authMethod: 'basic' },
-    3600,
-  );
+  const session = createSession({ userId: 'web:basic:alice', displayName: 'Alice', authMethod: 'basic' }, 3600);
   const cookie = signSessionCookie(session.id, SESSION_SECRET);
-  const codeChallenge =
-    opts?.challenge ?? crypto.createHash('sha256').update('verifier').digest('base64url');
+  const codeChallenge = opts?.challenge ?? crypto.createHash('sha256').update('verifier').digest('base64url');
   const redirect = b.authorize(
     {
       originalUrl: '/authorize',
@@ -201,21 +197,15 @@ describe('webchat-mcp-oauth', () => {
   });
 
   it('matches IPv6 loopback redirect URIs by port-only difference', () => {
-    expect(
-      mcpRedirectUriMatches('http://[::1]:8787/callback', 'http://[::1]:9999/callback'),
-    ).toBe(true);
+    expect(mcpRedirectUriMatches('http://[::1]:8787/callback', 'http://[::1]:9999/callback')).toBe(true);
     // Same host only — do not alias ::1 ↔ 127.0.0.1 for redirect_uri (RFC 8252).
-    expect(
-      mcpRedirectUriMatches('http://[::1]:8787/callback', 'http://127.0.0.1:8787/callback'),
-    ).toBe(false);
+    expect(mcpRedirectUriMatches('http://[::1]:8787/callback', 'http://127.0.0.1:8787/callback')).toBe(false);
   });
 
   it('matches IPv6 loopback resource aliases with the same port', () => {
     expect(mcpResourceUrlMatches('http://[::1]:3200/mcp', 'http://127.0.0.1:3200/mcp')).toBe(true);
     expect(mcpResourceUrlMatches('http://localhost:3200/mcp', 'http://[::1]:3200/mcp')).toBe(true);
-    expect(mcpResourceUrlMatches('http://[::1]:9999/mcp', 'http://127.0.0.1:3200/mcp')).toBe(
-      false,
-    );
+    expect(mcpResourceUrlMatches('http://[::1]:9999/mcp', 'http://127.0.0.1:3200/mcp')).toBe(false);
   });
 
   it('purges stale oauth clients', async () => {

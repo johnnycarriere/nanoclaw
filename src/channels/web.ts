@@ -17,10 +17,7 @@ import { getDb, hasTable } from '../db/connection.js';
 import { getMessagingGroup, getMessagingGroupByPlatform } from '../db/messaging-groups.js';
 import { getPendingApproval, getSession } from '../db/sessions.js';
 import { log } from '../log.js';
-import {
-  bootstrapPayloadForUser,
-  setWebchatBootstrapBroadcaster,
-} from '../webchat-live.js';
+import { bootstrapPayloadForUser, setWebchatBootstrapBroadcaster } from '../webchat-live.js';
 import {
   buildWebchatBootstrap,
   ensureUserWebchatWirings,
@@ -28,11 +25,7 @@ import {
   readTeamFolder,
   WEB_INBOX_PLATFORM_ID,
 } from '../webchat-sync.js';
-import {
-  hasAdminPrivilege,
-  isGlobalAdmin,
-  isOwner,
-} from '../modules/permissions/db/user-roles.js';
+import { hasAdminPrivilege, isGlobalAdmin, isOwner } from '../modules/permissions/db/user-roles.js';
 import type { PublicAuthConfig } from '../webchat-auth-config.js';
 import { loadWebAdapterAuthConfig } from '../webchat-auth-config.js';
 import {
@@ -307,8 +300,7 @@ export function isAuthorizedApprovalActor(actorUserId: string, questionId: strin
     }
 
     const agentGroupId =
-      approval.agent_group_id ??
-      (approval.session_id ? getSession(approval.session_id)?.agent_group_id : null);
+      approval.agent_group_id ?? (approval.session_id ? getSession(approval.session_id)?.agent_group_id : null);
 
     if (!agentGroupId) {
       return isOwner(actorUserId) || isGlobalAdmin(actorUserId);
@@ -332,10 +324,7 @@ export function shouldMirrorApprovalToOrigin(
   deliveryPlatformId: string,
   publicMode: boolean,
 ): boolean {
-  if (
-    origin.platformId === WEB_INBOX_PLATFORM_ID ||
-    origin.platformId === deliveryPlatformId
-  ) {
+  if (origin.platformId === WEB_INBOX_PLATFORM_ID || origin.platformId === deliveryPlatformId) {
     return false;
   }
 
@@ -444,10 +433,7 @@ function validateInboundAttachments(raw: unknown): InboundAttachment[] | { error
   return validated;
 }
 
-function buildAgentFacingAttachment(
-  messageId: string,
-  meta: StoredAttachmentMeta,
-): Record<string, unknown> {
+function buildAgentFacingAttachment(messageId: string, meta: StoredAttachmentMeta): Record<string, unknown> {
   const base: Record<string, unknown> = {
     name: meta.name,
     type: meta.type === 'image' ? 'image' : 'file',
@@ -931,13 +917,9 @@ function attachMcpUser(
   }
 }
 
-function readMcpUser(
-  req: http.IncomingMessage,
-  res?: http.ServerResponse,
-): McpAccessTokenUser | undefined {
+function readMcpUser(req: http.IncomingMessage, res?: http.ServerResponse): McpAccessTokenUser | undefined {
   return (
-    (res ? (res as WebchatAuthedResponse).webchatMcpUser : undefined) ??
-    (req as WebchatAuthedRequest).webchatMcpUser
+    (res ? (res as WebchatAuthedResponse).webchatMcpUser : undefined) ?? (req as WebchatAuthedRequest).webchatMcpUser
   );
 }
 
@@ -948,8 +930,7 @@ function parseBearerAuthorization(header: string | undefined): string | null {
 }
 
 function internalApiBase(port: number, bindAddress?: string): string {
-  const host =
-    bindAddress === '0.0.0.0' || bindAddress === '::' || !bindAddress ? '127.0.0.1' : bindAddress;
+  const host = bindAddress === '0.0.0.0' || bindAddress === '::' || !bindAddress ? '127.0.0.1' : bindAddress;
   return `http://${host}:${port}`;
 }
 
@@ -1070,10 +1051,7 @@ export function createWebAdapter(opts: WebAdapterOptions): ChannelAdapter {
     return { ...msg, platformId: toLogicalPlatformId(msg.platformId) };
   }
 
-  function wsEventForClient(
-    event: Record<string, unknown>,
-    storagePlatformId?: string,
-  ): Record<string, unknown> {
+  function wsEventForClient(event: Record<string, unknown>, storagePlatformId?: string): Record<string, unknown> {
     if (!isPublicMode()) return event;
     const owner = storagePlatformId ? ownerUserIdFromPhysical(storagePlatformId) : null;
     if (owner) return { ...event, forUserId: owner };
@@ -1085,18 +1063,14 @@ export function createWebAdapter(opts: WebAdapterOptions): ChannelAdapter {
     storedAttachments?: StoredAttachmentMeta[],
   ): WebchatStoredMessage {
     const stored =
-      storedAttachments !== undefined
-        ? persistStoredAttachments(msg, storedAttachments)
-        : appendMessage(msg);
+      storedAttachments !== undefined ? persistStoredAttachments(msg, storedAttachments) : appendMessage(msg);
     const clientMsg = messageForClient(stored);
     broadcast(wsEventForClient({ type: 'message', message: clientMsg }, stored.platformId));
     return stored;
   }
 
   function broadcastMessageUpdate(message: WebchatStoredMessage): void {
-    broadcast(
-      wsEventForClient({ type: 'message_update', message: messageForClient(message) }, message.platformId),
-    );
+    broadcast(wsEventForClient({ type: 'message_update', message: messageForClient(message) }, message.platformId));
   }
 
   function readBody(req: http.IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<string> {
@@ -1629,7 +1603,12 @@ export function createWebAdapter(opts: WebAdapterOptions): ChannelAdapter {
     json(res, 200, { ok: true });
   }
 
-  function serveAttachment(messageId: string, storageName: string, req: http.IncomingMessage, res: http.ServerResponse): void {
+  function serveAttachment(
+    messageId: string,
+    storageName: string,
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): void {
     const filePath = getMessageAttachmentPath(messageId, storageName);
     if (!filePath) {
       res.writeHead(404).end();
@@ -1740,11 +1719,7 @@ export function createWebAdapter(opts: WebAdapterOptions): ChannelAdapter {
             const threadsMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/threads$/);
             if (threadsMatch && req.method === 'POST') {
               const logicalPlatformId = decodeURIComponent(threadsMatch[1]!);
-              const storagePlatformId = tryResolveStoragePlatformId(
-                logicalPlatformId,
-                requestUser.userId,
-                res,
-              );
+              const storagePlatformId = tryResolveStoragePlatformId(logicalPlatformId, requestUser.userId, res);
               if (storagePlatformId === undefined) return;
               await handleCreateThread(storagePlatformId, req, res);
               return;
@@ -1754,11 +1729,7 @@ export function createWebAdapter(opts: WebAdapterOptions): ChannelAdapter {
             if (threadMatch) {
               const logicalPlatformId = decodeURIComponent(threadMatch[1]!);
               const threadId = decodeURIComponent(threadMatch[2]!);
-              const storagePlatformId = tryResolveStoragePlatformId(
-                logicalPlatformId,
-                requestUser.userId,
-                res,
-              );
+              const storagePlatformId = tryResolveStoragePlatformId(logicalPlatformId, requestUser.userId, res);
               if (storagePlatformId === undefined) return;
               if (req.method === 'PATCH') {
                 await handlePatchThread(storagePlatformId, threadId, req, res);
@@ -1774,46 +1745,27 @@ export function createWebAdapter(opts: WebAdapterOptions): ChannelAdapter {
             if (msgMatch) {
               const logicalPlatformId = decodeURIComponent(msgMatch[1]!);
               const threadId = decodeURIComponent(msgMatch[2]!);
-              const storagePlatformId = tryResolveStoragePlatformId(
-                logicalPlatformId,
-                requestUser.userId,
-                res,
-              );
+              const storagePlatformId = tryResolveStoragePlatformId(logicalPlatformId, requestUser.userId, res);
               if (storagePlatformId === undefined) return;
               if (req.method === 'GET') {
                 const since = parseInt(url.searchParams.get('since') ?? '0', 10);
                 const messages = getMessages(storagePlatformId, threadId, since).map(messageForClient);
                 const engagedAgents =
-                  logicalPlatformId === WEB_LOBBY_PLATFORM_ID
-                    ? getEngagedAgents(storagePlatformId, threadId)
-                    : [];
+                  logicalPlatformId === WEB_LOBBY_PLATFORM_ID ? getEngagedAgents(storagePlatformId, threadId) : [];
                 json(res, 200, { messages, engagedAgents });
                 return;
               }
               if (req.method === 'POST') {
-                await handlePostMessage(
-                  logicalPlatformId,
-                  storagePlatformId,
-                  threadId,
-                  req,
-                  res,
-                  requestUser,
-                );
+                await handlePostMessage(logicalPlatformId, storagePlatformId, threadId, req, res, requestUser);
                 return;
               }
             }
 
-            const uploadChunkMatch = url.pathname.match(
-              /^\/api\/rooms\/([^/]+)\/threads\/([^/]+)\/uploads\/chunk$/,
-            );
+            const uploadChunkMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/threads\/([^/]+)\/uploads\/chunk$/);
             if (uploadChunkMatch && req.method === 'POST') {
               const logicalPlatformId = decodeURIComponent(uploadChunkMatch[1]!);
               const threadId = decodeURIComponent(uploadChunkMatch[2]!);
-              const storagePlatformId = tryResolveStoragePlatformId(
-                logicalPlatformId,
-                requestUser.userId,
-                res,
-              );
+              const storagePlatformId = tryResolveStoragePlatformId(logicalPlatformId, requestUser.userId, res);
               if (storagePlatformId === undefined) return;
               await handleChunkUpload(storagePlatformId, threadId, req, res);
               return;
@@ -1823,11 +1775,7 @@ export function createWebAdapter(opts: WebAdapterOptions): ChannelAdapter {
             if (uploadMatch && req.method === 'POST') {
               const logicalPlatformId = decodeURIComponent(uploadMatch[1]!);
               const threadId = decodeURIComponent(uploadMatch[2]!);
-              const storagePlatformId = tryResolveStoragePlatformId(
-                logicalPlatformId,
-                requestUser.userId,
-                res,
-              );
+              const storagePlatformId = tryResolveStoragePlatformId(logicalPlatformId, requestUser.userId, res);
               if (storagePlatformId === undefined) return;
               await handleMultipartUpload(storagePlatformId, threadId, req, res);
               return;
@@ -1837,11 +1785,7 @@ export function createWebAdapter(opts: WebAdapterOptions): ChannelAdapter {
             if (actionMatch && req.method === 'POST') {
               const logicalPlatformId = decodeURIComponent(actionMatch[1]!);
               const threadId = decodeURIComponent(actionMatch[2]!);
-              const storagePlatformId = tryResolveStoragePlatformId(
-                logicalPlatformId,
-                requestUser.userId,
-                res,
-              );
+              const storagePlatformId = tryResolveStoragePlatformId(logicalPlatformId, requestUser.userId, res);
               if (storagePlatformId === undefined) return;
               await handlePostAction(storagePlatformId, threadId, req, res, requestUser.userId);
               return;
@@ -1856,11 +1800,7 @@ export function createWebAdapter(opts: WebAdapterOptions): ChannelAdapter {
                 json(res, 400, { error: 'engaged agents only apply to lobby' });
                 return;
               }
-              const storagePlatformId = tryResolveStoragePlatformId(
-                logicalPlatformId,
-                requestUser.userId,
-                res,
-              );
+              const storagePlatformId = tryResolveStoragePlatformId(logicalPlatformId, requestUser.userId, res);
               if (storagePlatformId === undefined) return;
               const agents = removeEngagedAgent(storagePlatformId, threadId, agentFolder);
               broadcast(
@@ -1994,10 +1934,7 @@ export function createWebAdapter(opts: WebAdapterOptions): ChannelAdapter {
           ...(senderName ? { senderName } : {}),
         });
 
-        if (
-          origin &&
-          shouldMirrorApprovalToOrigin(origin, askQuestion.questionId, platformId, isPublicMode())
-        ) {
+        if (origin && shouldMirrorApprovalToOrigin(origin, askQuestion.questionId, platformId, isPublicMode())) {
           const mirrorId = `web-out-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
           persistAndBroadcast({
             id: mirrorId,

@@ -955,18 +955,18 @@ describe('router — per-wiring thread policy', () => {
       },
     });
 
-    // Declared adapter: group context reads the group declaration...
+    // FORK OVERRIDE: this install hardcodes unknown_sender_policy 'strict'
+    // for every auto-created messaging group (see src/router.ts) instead of
+    // upstream's declaration-driven resolveUnknownSenderPolicy. All three
+    // cases therefore expect 'strict'.
     await routeInbound(mention('tp-declared', 'tp:G1', true));
-    expect(getMessagingGroupByPlatform('tp-declared', 'tp:G1')!.unknown_sender_policy).toBe('public');
+    expect(getMessagingGroupByPlatform('tp-declared', 'tp:G1')!.unknown_sender_policy).toBe('strict');
 
-    // ...and DM context reads the dm declaration.
     await routeInbound(mention('tp-declared', 'tp:D1', false));
     expect(getMessagingGroupByPlatform('tp-declared', 'tp:D1')!.unknown_sender_policy).toBe('strict');
 
-    // Undeclared channel: the behavior-faithful fallback reproduces the
-    // historical hardcoded 'request_approval'.
     await routeInbound(mention('tp-undeclared', 'tp:U1', true));
-    expect(getMessagingGroupByPlatform('tp-undeclared', 'tp:U1')!.unknown_sender_policy).toBe('request_approval');
+    expect(getMessagingGroupByPlatform('tp-undeclared', 'tp:U1')!.unknown_sender_policy).toBe('strict');
   });
 });
 

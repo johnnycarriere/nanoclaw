@@ -138,23 +138,25 @@ vi.mock('../db/messaging-groups.js', () => ({
 }));
 
 vi.mock('../router.js', () => ({
-  routeInbound: vi.fn(async (event: {
-    platformId: string;
-    threadId: string | null;
-    message: { id: string; kind: 'chat' | 'chat-sdk'; content: string; timestamp: string; isGroup?: boolean };
-  }) => {
-    routeCaptures.push({
-      platformId: event.platformId,
-      threadId: event.threadId,
-      message: {
-        id: event.message.id,
-        kind: event.message.kind,
-        content: JSON.parse(event.message.content),
-        timestamp: event.message.timestamp,
-        isGroup: event.message.isGroup,
-      },
-    });
-  }),
+  routeInbound: vi.fn(
+    async (event: {
+      platformId: string;
+      threadId: string | null;
+      message: { id: string; kind: 'chat' | 'chat-sdk'; content: string; timestamp: string; isGroup?: boolean };
+    }) => {
+      routeCaptures.push({
+        platformId: event.platformId,
+        threadId: event.threadId,
+        message: {
+          id: event.message.id,
+          kind: event.message.kind,
+          content: JSON.parse(event.message.content),
+          timestamp: event.message.timestamp,
+          isGroup: event.message.isGroup,
+        },
+      });
+    },
+  ),
 }));
 
 import {
@@ -180,7 +182,12 @@ import { resetUploadStateForTests, getStagedUpload } from '../webchat-uploads.js
 import * as agentGroups from '../db/agent-groups.js';
 import * as webchatSync from '../webchat-sync.js';
 import * as webchatMentions from '../webchat-mentions.js';
-import { resetWebchatAuthSchemaForTests, createSession, signSessionCookie, WEBCHAT_SESSION_COOKIE } from '../webchat-auth-sessions.js';
+import {
+  resetWebchatAuthSchemaForTests,
+  createSession,
+  signSessionCookie,
+  WEBCHAT_SESSION_COOKIE,
+} from '../webchat-auth-sessions.js';
 import { createWebchatMcpOAuthBackend, MCP_DEFAULT_SCOPE, verifyMcpAccessToken } from '../webchat-mcp-oauth.js';
 import { encodeUserSuffix } from '../webchat-room-scope.js';
 import * as webchatRoomScope from '../webchat-room-scope.js';
@@ -277,7 +284,11 @@ async function reservePort(): Promise<number> {
   });
 }
 
-function httpPostJson(path: string, body: unknown, port = testPort): Promise<{ status: number; body: Record<string, unknown> }> {
+function httpPostJson(
+  path: string,
+  body: unknown,
+  port = testPort,
+): Promise<{ status: number; body: Record<string, unknown> }> {
   return new Promise((resolve, reject) => {
     const req = http.request(
       {
@@ -318,7 +329,9 @@ function httpMultipartUpload(
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const boundary = '----WebKitFormBoundaryTestUpload';
   const body = Buffer.concat([
-    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: application/octet-stream\r\n\r\n`),
+    Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: application/octet-stream\r\n\r\n`,
+    ),
     content,
     Buffer.from(`\r\n--${boundary}--\r\n`),
   ]);
@@ -1115,9 +1128,10 @@ describe('web channel adapter', () => {
       'thanks both',
       'thanks both',
     ]);
-    expect(
-      liveCaptures.map((c) => (c.message.content as { webchatReceiver: string }).webchatReceiver).sort(),
-    ).toEqual(['diego', 'sarah']);
+    expect(liveCaptures.map((c) => (c.message.content as { webchatReceiver: string }).webchatReceiver).sort()).toEqual([
+      'diego',
+      'sarah',
+    ]);
   });
 
   it('explicit @mention routes to all engaged agents with per-receiver metadata', async () => {
@@ -1226,8 +1240,14 @@ describe('web channel adapter', () => {
 
     const stub = diegoDeliveries.find((c) => c.message.id.includes('backfill-stub'));
     const intro = diegoDeliveries.find((c) => c.message.id.includes('backfill-intro'));
-    const replayOne = diegoDeliveries.find((c) => c.message.id.includes('backfill-replay') && (c.message.content as { text: string }).text.includes('hello one'));
-    const replayTwo = diegoDeliveries.find((c) => c.message.id.includes('backfill-replay') && (c.message.content as { text: string }).text === 'follow up two');
+    const replayOne = diegoDeliveries.find(
+      (c) =>
+        c.message.id.includes('backfill-replay') && (c.message.content as { text: string }).text.includes('hello one'),
+    );
+    const replayTwo = diegoDeliveries.find(
+      (c) =>
+        c.message.id.includes('backfill-replay') && (c.message.content as { text: string }).text === 'follow up two',
+    );
     const live = diegoDeliveries.find((c) => c.message.id.includes('-route-'));
     expect(stub).toBeDefined();
     expect(intro).toBeDefined();
@@ -1550,11 +1570,7 @@ describe('web channel adapter', () => {
   it('accepts multipart upload and message with uploadId reference', async () => {
     await adapter.setup(setup);
     const fileBytes = Buffer.from('uploaded-image-bytes');
-    const upload = await httpMultipartUpload(
-      '/api/rooms/lobby/threads/main/uploads',
-      'photo.png',
-      fileBytes,
-    );
+    const upload = await httpMultipartUpload('/api/rooms/lobby/threads/main/uploads', 'photo.png', fileBytes);
     expect(upload.status).toBe(200);
     expect(upload.body.uploadId).toBeTruthy();
 
@@ -1572,9 +1588,9 @@ describe('web channel adapter', () => {
     });
     expect(post.status).toBe(200);
     expect(post.body.messageId).toBeTruthy();
-    expect(
-      (post.body.attachments as Array<{ url?: string; name: string }> | undefined)?.[0]?.url,
-    ).toMatch(/^\/api\/attachments\//);
+    expect((post.body.attachments as Array<{ url?: string; name: string }> | undefined)?.[0]?.url).toMatch(
+      /^\/api\/attachments\//,
+    );
 
     const { body } = await httpGet('/api/rooms/lobby/threads/main/messages');
     const messages = (body as { messages: Array<{ attachments?: Array<{ url?: string; name: string }> }> }).messages;
@@ -1586,11 +1602,7 @@ describe('web channel adapter', () => {
   it('posts a message referencing a staged upload', async () => {
     await adapter.setup(setup);
     const fileBytes = Buffer.from('hello-upload');
-    const upload = await httpMultipartUpload(
-      '/api/rooms/lobby/threads/main/uploads',
-      'note.txt',
-      fileBytes,
-    );
+    const upload = await httpMultipartUpload('/api/rooms/lobby/threads/main/uploads', 'note.txt', fileBytes);
     expect(upload.status).toBe(200);
 
     const status = await httpPost('/api/rooms/lobby/threads/main/messages', {
@@ -1703,11 +1715,7 @@ describe('web channel adapter', () => {
     expect(createRes.status).toBe(200);
     const threadId = createRes.body.id;
     const fileBytes = Buffer.from('thread-scoped');
-    const upload = await httpMultipartUpload(
-      `/api/rooms/lobby/threads/${threadId}/uploads`,
-      'scoped.txt',
-      fileBytes,
-    );
+    const upload = await httpMultipartUpload(`/api/rooms/lobby/threads/${threadId}/uploads`, 'scoped.txt', fileBytes);
     expect(upload.status).toBe(200);
     const status = await httpPost('/api/rooms/lobby/threads/main/messages', {
       text: 'wrong thread',
@@ -1727,11 +1735,7 @@ describe('web channel adapter', () => {
   it('restores consumed uploads when duplicate uploadId references cannot both be consumed', async () => {
     await adapter.setup(setup);
     const fileBytes = Buffer.from('dup-ref');
-    const upload = await httpMultipartUpload(
-      '/api/rooms/lobby/threads/main/uploads',
-      'dup.txt',
-      fileBytes,
-    );
+    const upload = await httpMultipartUpload('/api/rooms/lobby/threads/main/uploads', 'dup.txt', fileBytes);
     expect(upload.status).toBe(200);
     const uploadId = upload.body.uploadId as string;
     const dupRef = {
@@ -1758,11 +1762,7 @@ describe('web channel adapter', () => {
   it('rejects upload references with mismatched metadata', async () => {
     await adapter.setup(setup);
     const fileBytes = Buffer.from('meta-check');
-    const upload = await httpMultipartUpload(
-      '/api/rooms/lobby/threads/main/uploads',
-      'meta.txt',
-      fileBytes,
-    );
+    const upload = await httpMultipartUpload('/api/rooms/lobby/threads/main/uploads', 'meta.txt', fileBytes);
     expect(upload.status).toBe(200);
     const status = await httpPost('/api/rooms/lobby/threads/main/messages', {
       text: 'bad meta',
@@ -1782,11 +1782,7 @@ describe('web channel adapter', () => {
   it('routes upload-referenced attachments without inline data when disk read fails', async () => {
     await adapter.setup(setup);
     const fileBytes = Buffer.from('route-me');
-    const upload = await httpMultipartUpload(
-      '/api/rooms/lobby/threads/thread_abc/uploads',
-      'route.txt',
-      fileBytes,
-    );
+    const upload = await httpMultipartUpload('/api/rooms/lobby/threads/thread_abc/uploads', 'route.txt', fileBytes);
     expect(upload.status).toBe(200);
     const originalRead = fs.readFileSync.bind(fs);
     vi.spyOn(fs, 'readFileSync').mockImplementation((filePath, ...args) => {
@@ -1821,11 +1817,7 @@ describe('web channel adapter', () => {
   it('routes large uploaded attachments without inline agent data', async () => {
     await adapter.setup(setup);
     const fileBytes = Buffer.alloc(5 * 1024 * 1024 + 1, 1);
-    const upload = await httpMultipartUpload(
-      '/api/rooms/lobby/threads/thread_abc/uploads',
-      'big.bin',
-      fileBytes,
-    );
+    const upload = await httpMultipartUpload('/api/rooms/lobby/threads/thread_abc/uploads', 'big.bin', fileBytes);
     expect(upload.status).toBe(200);
     captures.length = 0;
     const status = await httpPost('/api/rooms/lobby/threads/thread_abc/messages', {
@@ -1844,8 +1836,7 @@ describe('web channel adapter', () => {
     await flushAgentDeliveries();
     const live = captures.find((c) => c.message.id.includes('-route-'));
     expect(live).toBeDefined();
-    const attachments = (live!.message.content as { attachments?: Array<{ data?: string; size: number }> })
-      .attachments;
+    const attachments = (live!.message.content as { attachments?: Array<{ data?: string; size: number }> }).attachments;
     expect(attachments?.[0]?.size).toBeGreaterThan(5 * 1024 * 1024);
     expect(attachments?.[0]?.data).toBeUndefined();
   });
@@ -1995,11 +1986,7 @@ describe('web channel adapter', () => {
     await adapter.setup(setup);
     const store = await import('../webchat-store.js');
     const fileBytes = Buffer.from('rollback-me');
-    const upload = await httpMultipartUpload(
-      '/api/rooms/lobby/threads/main/uploads',
-      'rollback.txt',
-      fileBytes,
-    );
+    const upload = await httpMultipartUpload('/api/rooms/lobby/threads/main/uploads', 'rollback.txt', fileBytes);
     expect(upload.status).toBe(200);
     const moveSpy = vi.spyOn(store, 'moveAttachmentIntoMessage').mockImplementation(() => {
       throw new Error('move failed');
@@ -2039,11 +2026,7 @@ describe('web channel adapter', () => {
     await adapter.setup(setup);
     const store = await import('../webchat-store.js');
     const fileBytes = Buffer.from('moved-first');
-    const upload = await httpMultipartUpload(
-      '/api/rooms/lobby/threads/main/uploads',
-      'moved-first.txt',
-      fileBytes,
-    );
+    const upload = await httpMultipartUpload('/api/rooms/lobby/threads/main/uploads', 'moved-first.txt', fileBytes);
     expect(upload.status).toBe(200);
     const uploadId = upload.body.uploadId as string;
     const writeSpy = vi.spyOn(store, 'writeAttachmentFiles').mockImplementation(() => {
@@ -2078,16 +2061,8 @@ describe('web channel adapter', () => {
     const store = await import('../webchat-store.js');
     const firstBytes = Buffer.from('first-upload');
     const secondBytes = Buffer.from('second-upload');
-    const first = await httpMultipartUpload(
-      '/api/rooms/lobby/threads/main/uploads',
-      'first.txt',
-      firstBytes,
-    );
-    const second = await httpMultipartUpload(
-      '/api/rooms/lobby/threads/main/uploads',
-      'second.txt',
-      secondBytes,
-    );
+    const first = await httpMultipartUpload('/api/rooms/lobby/threads/main/uploads', 'first.txt', firstBytes);
+    const second = await httpMultipartUpload('/api/rooms/lobby/threads/main/uploads', 'second.txt', secondBytes);
     expect(first.status).toBe(200);
     expect(second.status).toBe(200);
     const firstId = first.body.uploadId as string;
@@ -2214,8 +2189,7 @@ describe('web channel adapter', () => {
     await flushAgentDeliveries();
     const replay = captures.find(
       (c) =>
-        c.message.id.includes('backfill-replay') &&
-        (c.message.content as { text?: string }).text === 'Agent reply',
+        c.message.id.includes('backfill-replay') && (c.message.content as { text?: string }).text === 'Agent reply',
     );
     expect(replay).toBeDefined();
     expect(replay!.message.content).toMatchObject({
@@ -2737,8 +2711,7 @@ describe('web channel adapter', () => {
     await flushAgentDeliveries();
     const replay = captures.find(
       (c) =>
-        c.message.id.includes('backfill-replay') &&
-        (c.message.content as { text?: string }).text?.includes('look'),
+        c.message.id.includes('backfill-replay') && (c.message.content as { text?: string }).text?.includes('look'),
     );
     expect(replay).toBeDefined();
     const att = (replay!.message.content as { attachments: Array<{ data?: string }> }).attachments![0]!;
@@ -2765,8 +2738,7 @@ describe('web channel adapter', () => {
       await flushAgentDeliveries();
       const replay = captures.find(
         (c) =>
-          c.message.id.includes('backfill-replay') &&
-          (c.message.content as { text?: string }).text?.includes('look'),
+          c.message.id.includes('backfill-replay') && (c.message.content as { text?: string }).text?.includes('look'),
       );
       expect(replay).toBeDefined();
       const att = (replay!.message.content as { attachments: Array<{ data?: string; name: string }> }).attachments![0]!;
@@ -2791,9 +2763,7 @@ describe('web channel adapter', () => {
     await adapter.setup(setup);
     const origFrom = Buffer.from.bind(Buffer);
     // Only intercept base64 decodes in validateInboundAttachments, not other Buffer.from callers.
-    const fromSpy = vi.spyOn(Buffer, 'from').mockImplementation(((
-      ...args: unknown[]
-    ) => {
+    const fromSpy = vi.spyOn(Buffer, 'from').mockImplementation(((...args: unknown[]) => {
       if (args[1] === 'base64') throw new Error('invalid base64');
       return (origFrom as (...a: unknown[]) => Buffer)(...args);
     }) as typeof Buffer.from);
@@ -3012,15 +2982,17 @@ describe('web channel adapter', () => {
   it('routes follow-ups for engaged folders missing from the current agent roster', async () => {
     await adapter.setup(setup);
     webchatStore.addEngagedAgents('lobby', 'thread_abc', ['orphan']);
-    const groupsSpy = vi.spyOn(agentGroups, 'getAllAgentGroups').mockReturnValue([
-      { id: 'ag-sarah', folder: 'sarah', name: 'Sarah', agent_provider: null, created_at: '2020-01-01' },
-    ]);
+    const groupsSpy = vi
+      .spyOn(agentGroups, 'getAllAgentGroups')
+      .mockReturnValue([
+        { id: 'ag-sarah', folder: 'sarah', name: 'Sarah', agent_provider: null, created_at: '2020-01-01' },
+      ]);
     try {
       await httpPost('/api/rooms/lobby/threads/thread_abc/messages', { text: 'hello everyone' });
       await flushAgentDeliveries();
-      expect(captures.some((c) => (c.message.content as { webchatReceiver?: string }).webchatReceiver === 'orphan')).toBe(
-        true,
-      );
+      expect(
+        captures.some((c) => (c.message.content as { webchatReceiver?: string }).webchatReceiver === 'orphan'),
+      ).toBe(true);
     } finally {
       groupsSpy.mockRestore();
     }
@@ -3035,8 +3007,7 @@ describe('web channel adapter', () => {
     await flushAgentDeliveries();
     const replay = captures.find(
       (c) =>
-        c.message.id.includes('backfill-replay') &&
-        (c.message.content as { text?: string }).text === 'Unnamed reply',
+        c.message.id.includes('backfill-replay') && (c.message.content as { text?: string }).text === 'Unnamed reply',
     );
     expect(replay).toBeDefined();
     expect((replay!.message.content as { sender?: string }).sender).toBe('Agent');
@@ -3288,9 +3259,7 @@ describe('web channel adapter', () => {
       ws.on('error', reject);
     });
 
-    expect(actionCaptures).toEqual([
-      { questionId: 'approval-2', value: 'approve', userId: 'web:local' },
-    ]);
+    expect(actionCaptures).toEqual([{ questionId: 'approval-2', value: 'approve', userId: 'web:local' }]);
     expect(events.some((e) => (e as { type?: string }).type === 'message_update')).toBe(true);
   });
 
@@ -3424,9 +3393,7 @@ describe('web channel adapter', () => {
     await expect(adapter.openDM!(userId)).resolves.toBe(`inbox:${encodeUserSuffix(userId)}`);
     // Host ensureUserDm strips the "web:" channel prefix before calling openDM.
     await expect(adapter.openDM!('basic:alice')).resolves.toBe(`inbox:${encodeUserSuffix(userId)}`);
-    await expect(adapter.openDM!('System')).resolves.toBe(
-      `inbox:${encodeUserSuffix('web:System')}`,
-    );
+    await expect(adapter.openDM!('System')).resolves.toBe(`inbox:${encodeUserSuffix('web:System')}`);
   });
 
   it('openDM reconstructs web user ids for stripped handles in public mode', async () => {
@@ -3434,9 +3401,7 @@ describe('web channel adapter', () => {
     resetWebchatAuthSchemaForTests();
     await adapter.setup(setup);
     // Even unexpected handles are treated as web user suffixes (web adapter only).
-    await expect(adapter.openDM!('telegram:123')).resolves.toBe(
-      `inbox:${encodeUserSuffix('web:telegram:123')}`,
-    );
+    await expect(adapter.openDM!('telegram:123')).resolves.toBe(`inbox:${encodeUserSuffix('web:telegram:123')}`);
   });
 
   it('returns 401 for protected API routes without session in public mode', async () => {
@@ -3476,17 +3441,14 @@ describe('web channel adapter', () => {
     await adapter.deliver(aliceInbox, null, { kind: 'chat', content: 'private for alice' });
 
     await vi.waitFor(() => {
-      expect(
-        aliceClient.events.some((event) => (event as { type?: string }).type === 'message'),
-      ).toBe(true);
+      expect(aliceClient.events.some((event) => (event as { type?: string }).type === 'message')).toBe(true);
     });
-    expect(
-      bobClient.events.some((event) => (event as { type?: string }).type === 'message'),
-    ).toBe(false);
+    expect(bobClient.events.some((event) => (event as { type?: string }).type === 'message')).toBe(false);
 
-    const privateEvent = aliceClient.events.find(
-      (event) => (event as { type?: string }).type === 'message',
-    ) as { forUserId?: string; message?: { platformId?: string } };
+    const privateEvent = aliceClient.events.find((event) => (event as { type?: string }).type === 'message') as {
+      forUserId?: string;
+      message?: { platformId?: string };
+    };
     expect(privateEvent.forUserId).toBe('web:basic:alice');
     expect(privateEvent.message?.platformId).toBe('inbox');
 
@@ -3518,10 +3480,9 @@ describe('web channel adapter', () => {
 
     const bobCookie = await loginBasicSession('bob');
     const aliceInboxPhysical = encodeURIComponent(`inbox:${encodeUserSuffix('web:basic:alice')}`);
-    const forbidden = await httpGetWithHeaders(
-      `/api/rooms/${aliceInboxPhysical}/threads/main/messages`,
-      { Cookie: bobCookie },
-    );
+    const forbidden = await httpGetWithHeaders(`/api/rooms/${aliceInboxPhysical}/threads/main/messages`, {
+      Cookie: bobCookie,
+    });
     expect(forbidden.status).toBe(403);
 
     const forbiddenAction = await httpPostJsonWithHeaders(
@@ -3531,10 +3492,9 @@ describe('web channel adapter', () => {
     );
     expect(forbiddenAction.status).toBe(403);
 
-    const forbiddenDelete = await httpDeleteWithHeaders(
-      `/api/rooms/${aliceInboxPhysical}/threads/main`,
-      { Cookie: bobCookie },
-    );
+    const forbiddenDelete = await httpDeleteWithHeaders(`/api/rooms/${aliceInboxPhysical}/threads/main`, {
+      Cookie: bobCookie,
+    });
     expect(forbiddenDelete.status).toBe(403);
 
     const forbiddenPatch = await httpPatchWithHeaders(
@@ -3872,9 +3832,7 @@ describe('web channel adapter', () => {
       { Cookie: cookie },
     );
     expect(action.status).toBe(200);
-    expect(actionCaptures).toEqual([
-      { questionId: 'approval-public', value: 'approve', userId: 'web:basic:alice' },
-    ]);
+    expect(actionCaptures).toEqual([{ questionId: 'approval-public', value: 'approve', userId: 'web:basic:alice' }]);
   });
 
   it('creates threads with session cookie in public mode', async () => {
@@ -3971,10 +3929,9 @@ describe('web channel adapter', () => {
 
     const token = await mintMcpAccessToken('alice');
     const bobInbox = `inbox:${encodeUserSuffix('web:basic:bob')}`;
-    const res = await httpGetWithHeaders(
-      `/api/rooms/${encodeURIComponent(bobInbox)}/threads/main/messages`,
-      { Authorization: `Bearer ${token}` },
-    );
+    const res = await httpGetWithHeaders(`/api/rooms/${encodeURIComponent(bobInbox)}/threads/main/messages`, {
+      Authorization: `Bearer ${token}`,
+    });
     expect(res.status).toBe(403);
   });
 
@@ -4010,7 +3967,9 @@ describe('web channel adapter', () => {
     const boundary = '----WebKitFormBoundaryMcpForbidden';
     const content = Buffer.from('hello');
     const body = Buffer.concat([
-      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="x.txt"\r\nContent-Type: text/plain\r\n\r\n`),
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="x.txt"\r\nContent-Type: text/plain\r\n\r\n`,
+      ),
       content,
       Buffer.from(`\r\n--${boundary}--\r\n`),
     ]);
@@ -4090,10 +4049,9 @@ describe('web channel adapter', () => {
 
     const token = await mintMcpAccessToken('alice');
     const bobInbox = `inbox:${encodeUserSuffix('web:basic:bob')}`;
-    const res = await httpDeleteWithHeaders(
-      `/api/rooms/${encodeURIComponent(bobInbox)}/threads/main`,
-      { Authorization: `Bearer ${token}` },
-    );
+    const res = await httpDeleteWithHeaders(`/api/rooms/${encodeURIComponent(bobInbox)}/threads/main`, {
+      Authorization: `Bearer ${token}`,
+    });
     expect(res.status).toBe(403);
   });
 
@@ -4695,13 +4653,14 @@ describe('web channel adapter', () => {
     const inbox = await httpGet('/api/rooms/inbox/threads/main/messages');
     const dm = await httpGet('/api/rooms/dm%3Asarah/threads/main/messages');
     expect((inbox.body as { messages: unknown[] }).messages).toHaveLength(1);
-    expect((dm.body as { messages: Array<{ card?: { questionId: string }; senderName?: string }> }).messages).toHaveLength(1);
     expect(
-      (dm.body as { messages: Array<{ card?: { questionId: string }; senderName?: string }> }).messages[0]?.card?.questionId,
+      (dm.body as { messages: Array<{ card?: { questionId: string }; senderName?: string }> }).messages,
+    ).toHaveLength(1);
+    expect(
+      (dm.body as { messages: Array<{ card?: { questionId: string }; senderName?: string }> }).messages[0]?.card
+        ?.questionId,
     ).toBe('approval-mirror');
-    expect(
-      (dm.body as { messages: Array<{ senderName?: string }> }).messages[0]?.senderName,
-    ).toBe('Sarah');
+    expect((dm.body as { messages: Array<{ senderName?: string }> }).messages[0]?.senderName).toBe('Sarah');
   });
 
   it('updates mirrored approval cards together when an action is taken', async () => {
@@ -4758,10 +4717,16 @@ describe('web channel adapter', () => {
     expect(updates).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          message: expect.objectContaining({ platformId: 'inbox', card: expect.objectContaining({ status: 'answered' }) }),
+          message: expect.objectContaining({
+            platformId: 'inbox',
+            card: expect.objectContaining({ status: 'answered' }),
+          }),
         }),
         expect.objectContaining({
-          message: expect.objectContaining({ platformId: 'dm:sarah', card: expect.objectContaining({ status: 'answered' }) }),
+          message: expect.objectContaining({
+            platformId: 'dm:sarah',
+            card: expect.objectContaining({ status: 'answered' }),
+          }),
         }),
       ]),
     );
@@ -4883,16 +4848,8 @@ describe('web channel adapter', () => {
     });
 
     const cookie = await loginBasicSession('alice');
-    const inbox = await httpGetWithHeaders(
-      '/api/rooms/inbox/threads/main/messages',
-      { Cookie: cookie },
-      testPort,
-    );
-    const dm = await httpGetWithHeaders(
-      '/api/rooms/dm%3Asarah/threads/main/messages',
-      { Cookie: cookie },
-      testPort,
-    );
+    const inbox = await httpGetWithHeaders('/api/rooms/inbox/threads/main/messages', { Cookie: cookie }, testPort);
+    const dm = await httpGetWithHeaders('/api/rooms/dm%3Asarah/threads/main/messages', { Cookie: cookie }, testPort);
     expect((inbox.body as { messages: unknown[] }).messages).toHaveLength(1);
     expect((dm.body as { messages: unknown[] }).messages).toHaveLength(0);
   });
@@ -4931,11 +4888,7 @@ describe('web channel adapter', () => {
     });
 
     const cookie = await loginBasicSession('alice');
-    const dm = await httpGetWithHeaders(
-      '/api/rooms/dm%3Asarah/threads/main/messages',
-      { Cookie: cookie },
-      testPort,
-    );
+    const dm = await httpGetWithHeaders('/api/rooms/dm%3Asarah/threads/main/messages', { Cookie: cookie }, testPort);
     expect((dm.body as { messages: unknown[] }).messages).toHaveLength(1);
   });
 
@@ -4974,11 +4927,7 @@ describe('web channel adapter', () => {
     });
 
     const cookie = await loginBasicSession('alice');
-    const dm = await httpGetWithHeaders(
-      '/api/rooms/dm%3Asarah/threads/main/messages',
-      { Cookie: cookie },
-      testPort,
-    );
+    const dm = await httpGetWithHeaders('/api/rooms/dm%3Asarah/threads/main/messages', { Cookie: cookie }, testPort);
     expect((dm.body as { messages: unknown[] }).messages).toHaveLength(1);
   });
 
@@ -5067,12 +5016,8 @@ describe('web channel adapter', () => {
   });
 
   it('shouldMirrorApprovalToOrigin covers inbox, local, and lookup guards', () => {
-    expect(
-      shouldMirrorApprovalToOrigin({ platformId: 'inbox', threadId: 'main' }, 'q', 'inbox:x', true),
-    ).toBe(false);
-    expect(
-      shouldMirrorApprovalToOrigin({ platformId: 'dm:sarah', threadId: 'main' }, 'q', 'inbox', false),
-    ).toBe(true);
+    expect(shouldMirrorApprovalToOrigin({ platformId: 'inbox', threadId: 'main' }, 'q', 'inbox:x', true)).toBe(false);
+    expect(shouldMirrorApprovalToOrigin({ platformId: 'dm:sarah', threadId: 'main' }, 'q', 'inbox', false)).toBe(true);
 
     hasTableMock.mockReturnValueOnce(false);
     expect(
@@ -5110,9 +5055,7 @@ describe('web channel adapter', () => {
     getPendingApprovalMock.mockReturnValueOnce({
       approver_user_id: 'web:basic:alice',
     } as never);
-    expect(
-      shouldMirrorApprovalToOrigin({ platformId: 'lobby', threadId: 'main' }, 'q', 'inbox:x', true),
-    ).toBe(false);
+    expect(shouldMirrorApprovalToOrigin({ platformId: 'lobby', threadId: 'main' }, 'q', 'inbox:x', true)).toBe(false);
 
     getPendingApprovalMock.mockImplementationOnce(() => {
       throw new Error('mirror lookup failed');
@@ -5190,11 +5133,7 @@ describe('web channel adapter', () => {
     });
 
     const cookie = await loginBasicSession('alice');
-    const dm = await httpGetWithHeaders(
-      '/api/rooms/dm%3Asarah/threads/main/messages',
-      { Cookie: cookie },
-      testPort,
-    );
+    const dm = await httpGetWithHeaders('/api/rooms/dm%3Asarah/threads/main/messages', { Cookie: cookie }, testPort);
     expect((dm.body as { messages: unknown[] }).messages).toHaveLength(0);
   });
 });

@@ -305,7 +305,9 @@ describe('webchat-store', () => {
       timestamp: 1000,
       platformId: 'lobby',
       threadId: MAIN_THREAD,
-      attachments: [{ name: 'photo.png', mimeType: 'image/png', type: 'image', size: 4, data: Buffer.from('x').toString('base64') }],
+      attachments: [
+        { name: 'photo.png', mimeType: 'image/png', type: 'image', size: 4, data: Buffer.from('x').toString('base64') },
+      ],
     });
     expect(getMessageAttachmentPath('web-att-lookup', '../evil.png')).toBeNull();
     expect(getMessageAttachmentPath('web-att-lookup', 'missing.png')).toBeNull();
@@ -323,7 +325,9 @@ describe('webchat-store', () => {
         timestamp: 1,
         platformId: 'lobby',
         threadId: MAIN_THREAD,
-        attachments: [{ name: 'a.png', mimeType: 'image/png', type: 'image', size: 1, data: Buffer.from('x').toString('base64') }],
+        attachments: [
+          { name: 'a.png', mimeType: 'image/png', type: 'image', size: 1, data: Buffer.from('x').toString('base64') },
+        ],
       }),
     ).toThrow('Invalid message id');
   });
@@ -395,7 +399,15 @@ describe('webchat-store', () => {
       timestamp: 1000,
       platformId: 'lobby',
       threadId: MAIN_THREAD,
-      attachments: [{ name: 'photo.png', mimeType: 'image/png', type: 'image', size: 4, data: Buffer.from('abcd').toString('base64') }],
+      attachments: [
+        {
+          name: 'photo.png',
+          mimeType: 'image/png',
+          type: 'image',
+          size: 4,
+          data: Buffer.from('abcd').toString('base64'),
+        },
+      ],
     });
     const stored = getMessages('lobby', MAIN_THREAD);
     const enriched = enrichMessagesWithAttachmentData(stored);
@@ -410,7 +422,15 @@ describe('webchat-store', () => {
       timestamp: 1000,
       platformId: 'lobby',
       threadId: 'thread_del',
-      attachments: [{ name: 'photo.png', mimeType: 'image/png', type: 'image', size: 4, data: Buffer.from('abcd').toString('base64') }],
+      attachments: [
+        {
+          name: 'photo.png',
+          mimeType: 'image/png',
+          type: 'image',
+          size: 4,
+          data: Buffer.from('abcd').toString('base64'),
+        },
+      ],
     });
     expect(fs.existsSync(path.join(webchatFilesDir(), 'web-att-del'))).toBe(true);
     deleteThreadData('lobby', 'thread_del');
@@ -438,7 +458,15 @@ describe('webchat-store', () => {
       timestamp: 1000,
       platformId: 'lobby',
       threadId: MAIN_THREAD,
-      attachments: [{ name: 'photo.png', mimeType: 'image/png', type: 'image', size: 4, data: Buffer.from('abcd').toString('base64') }],
+      attachments: [
+        {
+          name: 'photo.png',
+          mimeType: 'image/png',
+          type: 'image',
+          size: 4,
+          data: Buffer.from('abcd').toString('base64'),
+        },
+      ],
     });
     const readSpy = vi.spyOn(fs, 'readFileSync').mockImplementation(() => {
       throw new Error('read failed');
@@ -515,7 +543,15 @@ describe('webchat-store', () => {
       timestamp: 1000,
       platformId: 'lobby',
       threadId: MAIN_THREAD,
-      attachments: [{ name: 'photo.png', mimeType: 'image/png', type: 'image', size: 4, data: Buffer.from('abcd').toString('base64') }],
+      attachments: [
+        {
+          name: 'photo.png',
+          mimeType: 'image/png',
+          type: 'image',
+          size: 4,
+          data: Buffer.from('abcd').toString('base64'),
+        },
+      ],
     });
     const recent = getRecentMessages('lobby', MAIN_THREAD, 10);
     expect(recent[0]!.attachments?.[0]?.url).toContain('/api/attachments/');
@@ -542,7 +578,15 @@ describe('webchat-store', () => {
       timestamp: 1000,
       platformId: 'lobby',
       threadId: MAIN_THREAD,
-      attachments: [{ name: 'photo.png', mimeType: 'image/png', type: 'image', size: 4, data: Buffer.from('abcd').toString('base64') }],
+      attachments: [
+        {
+          name: 'photo.png',
+          mimeType: 'image/png',
+          type: 'image',
+          size: 4,
+          data: Buffer.from('abcd').toString('base64'),
+        },
+      ],
     });
     const db = new Database(webchatDbPath());
     try {
@@ -593,13 +637,15 @@ describe('webchat-store', () => {
       timestamp: 1000,
       platformId: 'lobby',
       threadId: MAIN_THREAD,
-      attachments: [{ name: 'photo.png', mimeType: 'image/png', type: 'image', data: Buffer.from('abcd').toString('base64') }],
+      attachments: [
+        { name: 'photo.png', mimeType: 'image/png', type: 'image', data: Buffer.from('abcd').toString('base64') },
+      ],
     });
     const db = new Database(webchatDbPath());
     try {
-      const row = db
-        .prepare('SELECT attachments_json FROM web_messages WHERE id = ?')
-        .get('web-no-size') as { attachments_json: string };
+      const row = db.prepare('SELECT attachments_json FROM web_messages WHERE id = ?').get('web-no-size') as {
+        attachments_json: string;
+      };
       const stored = JSON.parse(row.attachments_json) as Array<{ size: number }>;
       expect(stored[0]!.size).toBe(4);
     } finally {
@@ -674,7 +720,9 @@ describe('webchat-store', () => {
       timestamp: 1000,
       platformId: 'lobby',
       threadId: MAIN_THREAD,
-      attachments: [{ name: 'escape.png', mimeType: 'image/png', type: 'image', data: Buffer.from('x').toString('base64') }],
+      attachments: [
+        { name: 'escape.png', mimeType: 'image/png', type: 'image', data: Buffer.from('x').toString('base64') },
+      ],
     });
     const origResolve = path.resolve;
     const resolveSpy = vi.spyOn(path, 'resolve').mockImplementation((...args) => {
@@ -1104,9 +1152,7 @@ describe('webchat-store', () => {
     });
     expect(stored.storageName).toBe('0-source.bin');
     expect(fs.existsSync(sourcePath)).toBe(false);
-    expect(fs.readFileSync(getMessageAttachmentPath('web-move', stored.storageName)!)).toEqual(
-      Buffer.from('moved'),
-    );
+    expect(fs.readFileSync(getMessageAttachmentPath('web-move', stored.storageName)!)).toEqual(Buffer.from('moved'));
 
     const message = appendMessageWithAttachmentMeta(
       {
@@ -1256,9 +1302,7 @@ describe('webchat-store', () => {
         size: 6,
         sourcePath,
       });
-      expect(fs.readFileSync(getMessageAttachmentPath('web-copy', stored.storageName)!)).toEqual(
-        Buffer.from('copied'),
-      );
+      expect(fs.readFileSync(getMessageAttachmentPath('web-copy', stored.storageName)!)).toEqual(Buffer.from('copied'));
       expect(fs.existsSync(sourcePath)).toBe(false);
     } finally {
       renameSpy.mockRestore();

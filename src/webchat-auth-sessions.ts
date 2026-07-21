@@ -189,9 +189,12 @@ function purgeExpiredSessions(db: Database.Database): void {
 export function saveOAuthState(state: string, providerId: string, codeVerifier: string): void {
   const db = getAuthDb();
   purgeOAuthStates(db);
-  db.prepare(
-    `INSERT INTO web_oauth_states (state, provider_id, code_verifier, created_at_ms) VALUES (?, ?, ?, ?)`,
-  ).run(state, providerId, codeVerifier, Date.now());
+  db.prepare(`INSERT INTO web_oauth_states (state, provider_id, code_verifier, created_at_ms) VALUES (?, ?, ?, ?)`).run(
+    state,
+    providerId,
+    codeVerifier,
+    Date.now(),
+  );
 }
 
 export interface OAuthStateRecord {
@@ -249,10 +252,7 @@ export function parseCookieHeader(header: string | undefined, name: string): str
   return undefined;
 }
 
-export function sessionCookieHeader(
-  value: string,
-  opts: { secure: boolean; maxAgeSeconds: number },
-): string {
+export function sessionCookieHeader(value: string, opts: { secure: boolean; maxAgeSeconds: number }): string {
   const parts = [
     `${WEBCHAT_SESSION_COOKIE}=${encodeURIComponent(value)}`,
     'HttpOnly',

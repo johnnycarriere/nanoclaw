@@ -110,15 +110,11 @@ async function main(): Promise<void> {
   // Idempotent — skips groups that already have a config row.
   backfillContainerConfigs();
 
-  // 1c. One-time filesystem cutover — idempotent, no-op after first run.
-  migrateGroupsToClaudeLocal();
-
   // 1c. Backfill host_reaction_state from each session's outbound.db so
   //     the next sweep doesn't re-storm 👍 reactions across the historic
   //     processing_ack backlog after migration 014. Idempotent — entries
   //     are insert-or-ignored, so safe on every startup.
   await backfillReactionStateOnStartup();
-
 
   // 2. Container runtime
   ensureContainerRuntimeRunning();

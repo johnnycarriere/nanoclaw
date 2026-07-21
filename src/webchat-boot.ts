@@ -22,29 +22,36 @@ import { refreshWebchatAfterAgentChange } from './webchat-live.js';
  */
 async function installAgentGroupLiveRefresh(): Promise<void> {
   try {
-    const { registerDeliveryAction } = await import('./delivery.js');
-    const { registerApprovalHandler, getApprovalHandler } = await import(
-      './modules/approvals/primitive.js'
-    );
-    const { handleCreateAgent } = await import(
+    const { registerDeliveryAction, reenterGuardedDeliveryAction } = await import('./delivery.js');
+    const { registerApprovalHandler, getApprovalHandler } = await import('./modules/approvals/primitive.js');
+    const { createAgent, validateCreateAgent, requestCreateAgentHold } = await import(
       './modules/agent-to-agent/create-agent.js'
     );
+    const { agentsCreate } = await import('./modules/agent-to-agent/guard.js');
+    const { notifyAgent } = await import('./modules/approvals/index.js');
 
-    registerDeliveryAction('create_agent', async (content, session) => {
-      await handleCreateAgent(content, session);
-      // Idempotent even when the handler only queued an approval.
-      refreshWebchatAfterAgentChange();
-    });
-
-    // This fork applies create_agent directly in the delivery action (no
-    // approval hold). Wrap an existing approval handler only if one is present.
-    const existingCreateAgent = getApprovalHandler('create_agent');
-    if (existingCreateAgent) {
-      registerApprovalHandler('create_agent', async (ctx) => {
-        await existingCreateAgent(ctx);
+    // Re-register create_agent with the SAME guard spec upstream uses (an
+    // unguarded re-register would throw — it would disarm the guard), only
+    // wrapping the handler to refresh webchat after the agent is created.
+    // Approval re-entry goes through this same handler via
+    // reenterGuardedDeliveryAction, so the refresh covers both paths.
+    registerDeliveryAction(
+      'create_agent',
+      async (content, session) => {
+        await createAgent(content, session);
         refreshWebchatAfterAgentChange();
-      });
-    }
+      },
+      {
+        guardAction: agentsCreate,
+        precheck: validateCreateAgent,
+        requestHold: requestCreateAgentHold,
+        onDeny: (_content, session, reason) => notifyAgent(session, `create_agent denied: ${reason}`),
+      },
+    );
+
+    // Approval re-entry must point at the freshly wrapped entry, not any
+    // handler captured before the re-register.
+    registerApprovalHandler('create_agent', reenterGuardedDeliveryAction('create_agent'));
 
     // Wrap CLI delete (and only delete) so approved `ncl groups delete` drops
     // DMs from connected browsers. Must keep the original handler's notify path.
@@ -64,7 +71,7 @@ async function installAgentGroupLiveRefresh(): Promise<void> {
 
     log.info('Webchat create_agent live refresh installed');
   } catch (err) {
-    log.debug('Webchat agent-group live refresh unavailable', { err });
+    log.warn('Webchat agent-group live refresh unavailable', { err });
   }
 }
 

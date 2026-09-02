@@ -1,4 +1,8 @@
 onlyBuiltDependencies:
+  # better-sqlite3: host central DB + session mailboxes need its native
+  # binding; without this entry pnpm skips the build script and the host
+  # cannot load SQLite. Approved by Johnny 2026-09-02 (fork policy).
+  - better-sqlite3
   - esbuild
   - protobufjs
   - sharp

@@ -420,7 +420,7 @@ export async function handlePublicAuthRequest(
   url: URL,
   config: PublicAuthConfig,
   json: JsonResponder,
-  onLogin: (user: WebchatSessionUser) => void,
+  onLogin: (user: WebchatSessionUser) => void | Promise<void>,
   /** Public path prefix (e.g. `/webchat`) for post-login redirect under a stripPrefix mount. */
   publicPath?: string,
 ): Promise<boolean> {
@@ -470,7 +470,7 @@ export async function handlePublicAuthRequest(
     }
     // Wire before Set-Cookie so a wiring/db failure cannot leave a usable session cookie.
     try {
-      onLogin(user);
+      await onLogin(user);
     } catch (err) {
       log.error('Webchat basic login onLogin failed', { err, userId: user.userId });
       json(res, 500, { error: 'Login failed' });
@@ -527,7 +527,7 @@ export async function handlePublicAuthRequest(
     try {
       const user = await exchangeCode(config, provider, code, oauthState.codeVerifier);
       // Wire before Set-Cookie so a wiring/db failure cannot leave a usable session cookie.
-      onLogin(user);
+      await onLogin(user);
       writeSession(res, config, user);
       redirect(res, home);
     } catch (e) {

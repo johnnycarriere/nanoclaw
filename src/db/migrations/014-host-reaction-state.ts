@@ -12,14 +12,13 @@
  * (Telegram showed 26 simultaneous re-fires on old messages), we need a
  * real durable record.
  */
-import type Database from 'better-sqlite3';
 import type { Migration } from './index.js';
 
 export const migration014: Migration = {
   version: 14,
   name: 'host-reaction-state',
-  up(db: Database.Database) {
-    db.exec(`
+  async up(db) {
+    await db.exec(`
       CREATE TABLE IF NOT EXISTS host_reaction_state (
         message_id   TEXT PRIMARY KEY,
         last_emitted TEXT NOT NULL CHECK (last_emitted IN ('processing', 'completed')),

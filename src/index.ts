@@ -4,29 +4,32 @@
  * Thin orchestrator: init DB, run migrations, start channel adapters,
  * start delivery polls, start sweep, handle shutdown.
  */
-import path from 'path';
-
 import { backfillContainerConfigs } from './backfill-container-configs.js';
-import { DATA_DIR } from './config.js';
+import { CENTRAL_DB_PATH } from './config.js';
 import { enforceStartupBackoff, resetCircuitBreaker } from './circuit-breaker.js';
-import { initDb } from './db/connection.js';
+import { adoptRunningSessions } from './container-runner.js';
+import { closeDb, initDb } from './db/connection.js';
 import { runMigrations } from './db/migrations/index.js';
-import { ensureContainerRuntimeRunning, cleanupOrphans } from './container-runtime.js';
+import { getSessionDriver } from './drivers/index.js';
 import { startActiveDeliveryPoll, startSweepDeliveryPoll, setDeliveryAdapter, stopDeliveryPolls } from './delivery.js';
+import { startHostInstanceLease, stopHostInstanceLease } from './host-instance.js';
 import { startHostSweep, stopHostSweep } from './host-sweep.js';
+import { startHostModules, stopHostModules } from './host-lifecycle.js';
 import { routeInbound } from './router.js';
 import { log } from './log.js';
 import { getActiveSessions } from './db/sessions.js';
-import { openOutboundDb } from './session-manager.js';
+import { outboundDbPath } from './mailbox/sqlite/paths.js';
+import { openOutboundDb } from './mailbox/sqlite/session-db.js';
 import { backfillReactionStateFromOutDb } from './status-reactions.js';
 import { enforceUpgradeTripwire } from './upgrade-state.js';
 
-// Response + shutdown registries live in response-registry.ts to break the
+// Response registry lives in response-registry.ts to break the
 // circular import cycle: src/index.ts imports src/modules/index.js for side
-// effects, and the modules call registerResponseHandler/onShutdown at top
-// level — which would hit a TDZ error if the arrays lived here. Re-exported
-// here so existing callers see the same surface.
-import { getResponseHandlers, getShutdownCallbacks, type ResponsePayload } from './response-registry.js';
+// effects, and the modules call registerResponseHandler at top level — which
+// would hit a TDZ error if the array lived here.
+import { getResponseHandlers, type ResponsePayload } from './response-registry.js';
+
+const hostAbortController = new AbortController();
 
 /**
  * Walk every active session's outbound.db once and pre-populate
@@ -38,14 +41,14 @@ import { getResponseHandlers, getShutdownCallbacks, type ResponsePayload } from 
  * file doesn't block startup.
  */
 async function backfillReactionStateOnStartup(): Promise<void> {
-  const sessions = getActiveSessions();
+  const sessions = await getActiveSessions();
   if (sessions.length === 0) return;
   let backfilled = 0;
   for (const session of sessions) {
     try {
-      const outDb = openOutboundDb(session.agent_group_id, session.id);
+      const outDb = openOutboundDb(outboundDbPath(session.agent_group_id, session.id));
       try {
-        backfillReactionStateFromOutDb(outDb);
+        await backfillReactionStateFromOutDb(outDb);
         backfilled++;
       } finally {
         outDb.close();
@@ -73,8 +76,8 @@ async function dispatchResponse(payload: ResponsePayload): Promise<void> {
 // Channel skills uncomment lines in channels/index.ts to enable them.
 import './channels/index.js';
 
-// Modules barrel — default modules (typing, mount-security) ship here; skills
-// append registry-based modules. Imported for side effects (registrations).
+// Modules barrel — imports registration modules, including the singular
+// mailbox composition slot. Imported for side effects.
 import './modules/index.js';
 
 // CLI command barrel — populates the `ncl` registry before the CLI server
@@ -101,14 +104,14 @@ async function main(): Promise<void> {
   enforceUpgradeTripwire();
 
   // 1. Init central DB
-  const dbPath = path.join(DATA_DIR, 'v2.db');
-  const db = initDb(dbPath);
-  runMigrations(db);
-  log.info('Central DB ready', { path: dbPath });
+  const db = await initDb(CENTRAL_DB_PATH, { role: 'host' });
+  await runMigrations(db, undefined, { mode: 'auto' });
+  log.info('Central DB ready', { dialect: db.dialect });
 
   // 1b. Backfill container_configs from legacy container.json files.
   // Idempotent — skips groups that already have a config row.
-  backfillContainerConfigs();
+  if (db.dialect === 'sqlite') await backfillContainerConfigs();
+  else log.info('Skipping local container.json backfill for non-local central DB');
 
   // 1c. Backfill host_reaction_state from each session's outbound.db so
   //     the next sweep doesn't re-storm 👍 reactions across the historic
@@ -116,9 +119,11 @@ async function main(): Promise<void> {
   //     are insert-or-ignored, so safe on every startup.
   await backfillReactionStateOnStartup();
 
-  // 2. Container runtime
-  ensureContainerRuntimeRunning();
-  cleanupOrphans();
+  // 2. Session runtime: prove it is reachable, then reconcile what survived a
+  // restart. Adoption replaces the old reap-everything cleanup — a session that
+  // is still running keeps running, and only true orphans are stopped.
+  await getSessionDriver().ensureReady?.();
+  await adoptRunningSessions();
 
   // 3. Channel adapters
   const { startWebChat } = await import('./webchat-boot.js');
@@ -187,16 +192,24 @@ async function main(): Promise<void> {
   // createChannelDeliveryAdapter in channels/channel-registry.ts.
   setDeliveryAdapter(createChannelDeliveryAdapter());
 
-  // 5. Start delivery polls
+  // 5. Start registered host modules. Imports only registered callbacks; the
+  // actual work begins here, after DB + delivery are ready and before polls.
+  await startHostModules({ db, signal: hostAbortController.signal });
+
+  // 5b. Register this host process in durable state and keep its lease fresh
+  // (shadow state — observability across restarts, no behavior reads it).
+  await startHostInstanceLease();
+
+  // 6. Start delivery polls
   startActiveDeliveryPoll();
   startSweepDeliveryPoll();
   log.info('Delivery polls started');
 
-  // 6. Start host sweep
+  // 7. Start host sweep
   startHostSweep();
   log.info('Host sweep started');
 
-  // 7. Start the `ncl` CLI socket server (data/ncl.sock).
+  // 8. Start the `ncl` CLI socket server (data/ncl.sock).
   await startCliServer();
 
   log.info('NanoClaw running');
@@ -205,19 +218,17 @@ async function main(): Promise<void> {
 /** Graceful shutdown. */
 async function shutdown(signal: string): Promise<void> {
   log.info('Shutdown signal received', { signal });
-  for (const cb of getShutdownCallbacks()) {
-    try {
-      await cb();
-    } catch (err) {
-      log.error('Shutdown callback threw', { err });
-    }
-  }
+  hostAbortController.abort();
+  await stopHostModules();
+  // Stamp the durable stop before the DB closes below.
+  await stopHostInstanceLease();
   stopDeliveryPolls();
   stopHostSweep();
   await stopCliServer();
   try {
     await teardownChannelAdapters();
   } finally {
+    await closeDb();
     // Always reset on graceful shutdown — even if teardown threw, we got here
     // via SIGTERM/SIGINT, not a crash, so the next start shouldn't be counted
     // as one.
@@ -226,8 +237,8 @@ async function shutdown(signal: string): Promise<void> {
   }
 }
 
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('SIGINT', () => void shutdown('SIGINT'));
 
 main().catch((err) => {
   log.fatal('Startup failed', { err });

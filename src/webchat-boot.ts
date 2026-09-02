@@ -38,7 +38,7 @@ async function installAgentGroupLiveRefresh(): Promise<void> {
       'create_agent',
       async (content, session) => {
         await createAgent(content, session);
-        refreshWebchatAfterAgentChange();
+        await refreshWebchatAfterAgentChange();
       },
       {
         guardAction: agentsCreate,
@@ -60,7 +60,7 @@ async function installAgentGroupLiveRefresh(): Promise<void> {
         await existingCli(ctx);
         const frame = ctx.payload?.frame as { command?: string } | undefined;
         if (frame?.command === 'groups-delete') {
-          refreshWebchatAfterAgentChange();
+          await refreshWebchatAfterAgentChange();
         }
       });
       log.info('Webchat groups-delete live refresh installed');
@@ -82,7 +82,7 @@ export async function startWebChat(): Promise<void> {
     return;
   }
 
-  syncWebchatWirings();
+  await syncWebchatWirings();
   ensureWebchatSchema();
   await installAgentGroupLiveRefresh();
   const port = process.env.WEBCHAT_PORT || env.WEBCHAT_PORT || '3200';

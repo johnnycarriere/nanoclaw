@@ -14,7 +14,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import { initTestSessionDb, closeSessionDb, getInboundDb } from './db/connection.js';
+import { initTestSessionDb, closeSessionDb, getInboundDb } from './mailbox/sqlite/connection.js';
 import { getPendingMessages } from './db/messages-in.js';
 import {
   formatMessages,
@@ -32,19 +32,24 @@ afterEach(() => {
   closeSessionDb();
 });
 
+// Production always assigns seq (the host writer); a NULL seq makes both the
+// query's ORDER BY and getPendingMessages' final sort ties, so multi-row
+// ordering becomes whatever SQLite returns — the source of a long flake.
+let nextSeq = 1;
+
 function insertMessage(
   id: string,
   kind: string,
   content: object,
-  opts?: { timestamp?: string },
+  opts?: { timestamp?: string; processAfter?: string },
 ) {
   const timestamp = opts?.timestamp ?? new Date().toISOString();
   getInboundDb()
     .prepare(
-      `INSERT INTO messages_in (id, kind, timestamp, status, content)
-       VALUES (?, ?, ?, 'pending', ?)`,
+      `INSERT INTO messages_in (id, kind, timestamp, status, process_after, content, seq)
+       VALUES (?, ?, ?, 'pending', ?, ?, ?)`,
     )
-    .run(id, kind, timestamp, JSON.stringify(content));
+    .run(id, kind, timestamp, opts?.processAfter ?? null, JSON.stringify(content), nextSeq++);
 }
 
 describe('context timezone header', () => {
@@ -52,6 +57,7 @@ describe('context timezone header', () => {
     insertMessage('m1', 'chat', { sender: 'Alice', text: 'hello' });
     const result = formatMessages(getPendingMessages());
     expect(result).toContain(`<context timezone="${TIMEZONE}"`);
+    expect(result).not.toContain('current_time=');
   });
 
   it('includes the header even when the message list is empty', () => {
@@ -131,6 +137,31 @@ describe('multi-message chat batches', () => {
   });
 });
 
+describe('structured chat links', () => {
+  it('preserves a link target hidden by shortened display text', () => {
+    insertMessage('m1', 'chat-sdk', {
+      sender: 'Joel',
+      text: 'read example.com/assets/…/review',
+      links: [{ url: 'https://example.com/assets/a_123/review?x=1&y=2' }],
+    });
+
+    const result = formatMessages(getPendingMessages());
+
+    expect(result).toContain(
+      'read example.com/assets/…/review\n[link: https://example.com/assets/a_123/review?x=1&amp;y=2]',
+    );
+  });
+
+  it('does not repeat a link already present in message text', () => {
+    const url = 'https://example.com/full-path';
+    insertMessage('m1', 'chat-sdk', { sender: 'Joel', text: `read ${url}`, links: [{ url }] });
+
+    const result = formatMessages(getPendingMessages());
+
+    expect(result.match(/https:\/\/example\.com\/full-path/g)).toHaveLength(1);
+  });
+});
+
 describe('timestamp formatting', () => {
   it('renders time via formatLocalTime (user TZ)', () => {
     // 2026-06-15T12:00:00Z — timezone-agnostic assertions (year is stable)
@@ -150,10 +181,22 @@ describe('timestamp formatting', () => {
 });
 
 describe('task timestamps', () => {
-  it('renders task time in the user TZ, same as chat rows', () => {
+  it('falls back to creation time for legacy rows without process_after', () => {
     insertMessage('t1', 'task', { prompt: 'do the thing' }, { timestamp: '2026-01-05T12:00:00.000Z' });
     const result = formatMessages(getPendingMessages());
     expect(result).toContain(`time="${formatLocalTime('2026-01-05T12:00:00.000Z', TIMEZONE)}"`);
+  });
+
+  it('renders the scheduled time plus the current run time', () => {
+    const created = '2026-01-04T12:00:00.000Z';
+    const scheduled = '2026-01-05T12:00:00.000Z';
+    insertMessage('t1', 'task', { prompt: "prepare today's brief" }, { timestamp: created, processAfter: scheduled });
+
+    const result = formatMessages(getPendingMessages());
+
+    expect(result).toContain(`time="${formatLocalTime(scheduled, TIMEZONE)}"`);
+    expect(result).not.toContain(`time="${formatLocalTime(created, TIMEZONE)}"`);
+    expect(result).toMatch(/current_time="(?:Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday), [^"]+"/);
   });
 });
 
@@ -243,7 +286,57 @@ describe('stripInternalTags', () => {
   });
 });
 
-describe('image attachment inlining (formatMessagesForPrompt)', () => {
+describe('app_context rendering (Slack agent mode, contract C4)', () => {
+  it('renders a compact single (viewing: …) line inside the message block', () => {
+    insertMessage('m1', 'chat-sdk', {
+      sender: 'Gavriel',
+      text: 'what do you think?',
+      app_context: { entities: [{ type: 'channel', id: 'C0DESIGN' }] },
+    });
+    const result = formatMessages(getPendingMessages());
+    expect(result).toContain('what do you think?\n(viewing: channel C0DESIGN)</message>');
+  });
+
+  it('joins multiple entities in order with commas', () => {
+    insertMessage('m1', 'chat-sdk', {
+      sender: 'Gavriel',
+      text: 'here',
+      app_context: {
+        entities: [
+          { type: 'channel', id: 'C0DESIGN' },
+          { type: 'canvas', id: 'F0CANVAS' },
+        ],
+      },
+    });
+    const result = formatMessages(getPendingMessages());
+    expect(result).toContain('(viewing: channel C0DESIGN, canvas F0CANVAS)');
+  });
+
+  it('renders nothing for absent, empty, or malformed app_context', () => {
+    insertMessage('m1', 'chat-sdk', { sender: 'A', text: 'no context' });
+    insertMessage('m2', 'chat-sdk', { sender: 'A', text: 'empty', app_context: { entities: [] } });
+    insertMessage('m3', 'chat-sdk', { sender: 'A', text: 'malformed', app_context: 'C0DESIGN' });
+    insertMessage('m4', 'chat-sdk', {
+      sender: 'A',
+      text: 'idless',
+      app_context: { entities: [{ type: 'channel' }] },
+    });
+    const result = formatMessages(getPendingMessages());
+    expect(result).not.toContain('(viewing:');
+  });
+
+  it('escapes XML-significant characters in entity values', () => {
+    insertMessage('m1', 'chat-sdk', {
+      sender: 'A',
+      text: 'x',
+      app_context: { entities: [{ type: 'channel', id: 'C1<&>' }] },
+    });
+    const result = formatMessages(getPendingMessages());
+    expect(result).toContain('(viewing: channel C1&lt;&amp;&gt;)');
+  });
+});
+
+describe('image attachment inlining (formatMessagesForPrompt) — fork', () => {
   // 1x1 PNG — minimal valid file for the magic-byte sniffer
   const PNG_1X1 = Buffer.from(
     '89504E470D0A1A0A0000000D49484452000000010000000108060000001F15C4890000000D' +
@@ -268,21 +361,11 @@ describe('image attachment inlining (formatMessagesForPrompt)', () => {
 
   it('extracts an image attachment as a base64 content block and emits a brief placeholder', () => {
     fs.writeFileSync(path.join(tmpRoot, 'inbox', 'pic.png'), PNG_1X1);
-    getInboundDb()
-      .prepare(
-        `INSERT INTO messages_in (id, kind, timestamp, status, content)
-         VALUES (?, ?, ?, 'pending', ?)`,
-      )
-      .run(
-        'm1',
-        'chat-sdk',
-        new Date().toISOString(),
-        JSON.stringify({
-          sender: 'Johnny',
-          text: 'check this out',
-          attachments: [{ type: 'image', name: 'pic.png', localPath: 'inbox/pic.png' }],
-        }),
-      );
+    insertMessage('m1', 'chat-sdk', {
+      sender: 'Johnny',
+      text: 'check this out',
+      attachments: [{ type: 'image', name: 'pic.png', localPath: 'inbox/pic.png' }],
+    });
 
     const result = formatMessagesForPrompt(getPendingMessages());
 
@@ -296,21 +379,11 @@ describe('image attachment inlining (formatMessagesForPrompt)', () => {
   });
 
   it('falls back to the path marker when the image file is missing', () => {
-    getInboundDb()
-      .prepare(
-        `INSERT INTO messages_in (id, kind, timestamp, status, content)
-         VALUES (?, ?, ?, 'pending', ?)`,
-      )
-      .run(
-        'm1',
-        'chat-sdk',
-        new Date().toISOString(),
-        JSON.stringify({
-          sender: 'Johnny',
-          text: 'lost image',
-          attachments: [{ type: 'image', name: 'gone.png', localPath: 'inbox/gone.png' }],
-        }),
-      );
+    insertMessage('m1', 'chat-sdk', {
+      sender: 'Johnny',
+      text: 'lost image',
+      attachments: [{ type: 'image', name: 'gone.png', localPath: 'inbox/gone.png' }],
+    });
 
     const result = formatMessagesForPrompt(getPendingMessages());
 
@@ -320,21 +393,11 @@ describe('image attachment inlining (formatMessagesForPrompt)', () => {
 
   it('leaves non-image attachments as path markers regardless of sink', () => {
     fs.writeFileSync(path.join(tmpRoot, 'inbox', 'doc.pdf'), '%PDF-1.7\n');
-    getInboundDb()
-      .prepare(
-        `INSERT INTO messages_in (id, kind, timestamp, status, content)
-         VALUES (?, ?, ?, 'pending', ?)`,
-      )
-      .run(
-        'm1',
-        'chat-sdk',
-        new Date().toISOString(),
-        JSON.stringify({
-          sender: 'Johnny',
-          text: 'see attached',
-          attachments: [{ type: 'document', name: 'doc.pdf', localPath: 'inbox/doc.pdf' }],
-        }),
-      );
+    insertMessage('m1', 'chat-sdk', {
+      sender: 'Johnny',
+      text: 'see attached',
+      attachments: [{ type: 'document', name: 'doc.pdf', localPath: 'inbox/doc.pdf' }],
+    });
 
     const result = formatMessagesForPrompt(getPendingMessages());
 
@@ -344,21 +407,11 @@ describe('image attachment inlining (formatMessagesForPrompt)', () => {
 
   it('legacy formatMessages (no sink) keeps the verbose path marker for images', () => {
     fs.writeFileSync(path.join(tmpRoot, 'inbox', 'pic.png'), PNG_1X1);
-    getInboundDb()
-      .prepare(
-        `INSERT INTO messages_in (id, kind, timestamp, status, content)
-         VALUES (?, ?, ?, 'pending', ?)`,
-      )
-      .run(
-        'm1',
-        'chat-sdk',
-        new Date().toISOString(),
-        JSON.stringify({
-          sender: 'Johnny',
-          text: 'pic',
-          attachments: [{ type: 'image', name: 'pic.png', localPath: 'inbox/pic.png' }],
-        }),
-      );
+    insertMessage('m1', 'chat-sdk', {
+      sender: 'Johnny',
+      text: 'pic',
+      attachments: [{ type: 'image', name: 'pic.png', localPath: 'inbox/pic.png' }],
+    });
 
     const text = formatMessages(getPendingMessages());
 

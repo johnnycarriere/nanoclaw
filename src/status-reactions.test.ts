@@ -71,9 +71,9 @@ function seedAck(messageId: string, status: 'processing' | 'completed' | 'failed
     .run(messageId, status);
 }
 
-beforeEach(() => {
-  const db = initTestDb();
-  runMigrations(db);
+beforeEach(async () => {
+  const db = await initTestDb();
+  await runMigrations(db);
   inDb = new Database(':memory:');
   outDb = new Database(':memory:');
   inDb.exec(INBOUND_SCHEMA);
@@ -82,10 +82,10 @@ beforeEach(() => {
   vi.mocked(getChannelAdapter).mockReturnValue(mockAdapter as never);
 });
 
-afterEach(() => {
+afterEach(async () => {
   inDb.close();
   outDb.close();
-  closeDb();
+  await closeDb();
 });
 
 describe('emitStatusReactions — idempotency', () => {
@@ -161,10 +161,10 @@ describe('emitStatusReactions — idempotency', () => {
     seedInbound(ids);
     for (const id of ids) seedAck(id, 'completed');
 
-    backfillReactionStateFromOutDb(outDb);
+    await backfillReactionStateFromOutDb(outDb);
 
     // host_reaction_state must now have one 'completed' entry per ack.
-    const stateCount = (getDb().prepare('SELECT COUNT(*) AS n FROM host_reaction_state').get() as { n: number }).n;
+    const stateCount = (await getDb().get<{ n: number }>('SELECT COUNT(*) AS n FROM host_reaction_state'))!.n;
     expect(stateCount).toBe(50);
 
     // First sweep tick after upgrade — nothing should fire.
@@ -184,10 +184,11 @@ describe('emitStatusReactions — idempotency', () => {
     // 'completed' just because the row also matches the backfill query.
     // (It only matches if the ack itself is 'completed', so this case
     // shouldn't even be reachable, but guard against future regression.)
-    backfillReactionStateFromOutDb(outDb);
-    const state = getDb()
-      .prepare('SELECT last_emitted FROM host_reaction_state WHERE message_id = ?')
-      .get('1644976441:700:ag-1') as { last_emitted: string } | undefined;
+    await backfillReactionStateFromOutDb(outDb);
+    const state = await getDb().get<{ last_emitted: string }>(
+      'SELECT last_emitted FROM host_reaction_state WHERE message_id = ?',
+      '1644976441:700:ag-1',
+    );
     expect(state?.last_emitted).toBe('processing');
   });
 
@@ -205,7 +206,7 @@ describe('emitStatusReactions — idempotency', () => {
     outDb.exec('BEGIN');
     for (const id of ids) seedAck(id, 'completed');
     outDb.exec('COMMIT');
-    backfillReactionStateFromOutDb(outDb);
+    await backfillReactionStateFromOutDb(outDb);
 
     await expect(emitStatusReactions(inDb, outDb)).resolves.toBeUndefined();
     expect(mockAdapter.postReaction).toHaveBeenCalledTimes(0);

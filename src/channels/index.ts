@@ -8,4 +8,8 @@
 
 import './cli.js';
 import './telegram.js';
-import './web.js';
+// FORK-LOCAL modules below carry a trailing comment on purpose: the skill
+// refresh (scripts/update-skills.ts) only treats bare `import './x.js';`
+// lines as skill-managed channels, and neither of these has a registry skill.
+import './telegram-fork.js'; // fork wrapper over ./telegram.js (see file header)
+import './web.js'; // fork-local webchat channel (installed by /add-webchat, patched locally)

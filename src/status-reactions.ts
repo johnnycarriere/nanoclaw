@@ -19,6 +19,10 @@
  * compaction reaction storm exposed it (26 simultaneous 👍 re-fires on
  * old messages). Persisting the last-emitted status per message kills
  * both restart-replay and sweep-loop replay.
+ *
+ * Session mailboxes (inbound/outbound) are read through raw SQLite handles
+ * the caller opens briefly — this module is SQLite-mailbox-only by
+ * construction. The central DB goes through the async `DbDriver`.
  */
 import type Database from 'better-sqlite3';
 
@@ -44,11 +48,6 @@ interface ReactionStateRow {
   last_emitted: EmittedStatus;
 }
 
-/**
- * Inspect processing_ack for newly-seen transitions and emit reactions.
- * Called after syncProcessingAcks() in the sweep loop so we're looking at
- * the current, canonical state.
- */
 // processing_ack grows unboundedly (completed rows are never deleted), so an
 // IN clause with one placeholder per row eventually exceeds SQLite's bind
 // limit (SQLITE_MAX_VARIABLE_NUMBER, 32766 in better-sqlite3) and every query
@@ -69,6 +68,31 @@ function selectByIdsChunked<T>(
   return out;
 }
 
+async function selectCentralByIdsChunked<T>(
+  sqlTemplate: (placeholders: string) => string,
+  ids: string[],
+): Promise<T[]> {
+  const db = getDb();
+  const out: T[] = [];
+  for (let i = 0; i < ids.length; i += IN_CLAUSE_BATCH) {
+    const chunk = ids.slice(i, i + IN_CLAUSE_BATCH);
+    const placeholders = chunk.map(() => '?').join(',');
+    out.push(...(await db.all<T>(sqlTemplate(placeholders), ...chunk)));
+  }
+  return out;
+}
+
+const UPSERT_STATE_SQL = `INSERT INTO host_reaction_state (message_id, last_emitted, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(message_id) DO UPDATE SET
+       last_emitted = excluded.last_emitted,
+       updated_at = excluded.updated_at`;
+
+/**
+ * Inspect processing_ack for newly-seen transitions and emit reactions.
+ * Called after the sweep has applied processing acks so we're looking at
+ * the current, canonical state.
+ */
 export async function emitStatusReactions(inDb: Database.Database, outDb: Database.Database): Promise<void> {
   const rows = outDb.prepare('SELECT message_id, status FROM processing_ack').all() as AckRow[];
   if (rows.length === 0) return;
@@ -84,22 +108,13 @@ export async function emitStatusReactions(inDb: Database.Database, outDb: Databa
   const inById = new Map(inRows.map((r) => [r.id, r]));
 
   // Pull the durable "already emitted" record for these same ids.
-  const centralDb = getDb();
-  const stateRows = selectByIdsChunked<ReactionStateRow>(
-    centralDb,
+  const stateRows = await selectCentralByIdsChunked<ReactionStateRow>(
     (ph) => `SELECT message_id, last_emitted FROM host_reaction_state WHERE message_id IN (${ph})`,
     ids,
   );
   const stateById = new Map(stateRows.map((r) => [r.message_id, r.last_emitted]));
 
-  const upsertStmt = centralDb.prepare(
-    `INSERT INTO host_reaction_state (message_id, last_emitted, updated_at)
-     VALUES (?, ?, ?)
-     ON CONFLICT(message_id) DO UPDATE SET
-       last_emitted = excluded.last_emitted,
-       updated_at = excluded.updated_at`,
-  );
-
+  const centralDb = getDb();
   for (const row of rows) {
     const last = stateById.get(row.message_id);
     const inMsg = inById.get(row.message_id);
@@ -107,10 +122,10 @@ export async function emitStatusReactions(inDb: Database.Database, outDb: Databa
 
     if (row.status === 'processing' && last !== 'processing' && last !== 'completed') {
       await fireReaction(inMsg, '👨‍💻');
-      upsertStmt.run(row.message_id, 'processing', new Date().toISOString());
+      await centralDb.run(UPSERT_STATE_SQL, row.message_id, 'processing', new Date().toISOString());
     } else if ((row.status === 'completed' || row.status === 'failed') && last !== 'completed') {
       await fireReaction(inMsg, '👍');
-      upsertStmt.run(row.message_id, 'completed', new Date().toISOString());
+      await centralDb.run(UPSERT_STATE_SQL, row.message_id, 'completed', new Date().toISOString());
     }
   }
 }
@@ -124,20 +139,28 @@ export async function emitStatusReactions(inDb: Database.Database, outDb: Databa
  * silently and the user sees a reaction storm). Safe to run on every
  * startup — entries are insert-or-ignored.
  */
-export function backfillReactionStateFromOutDb(outDb: Database.Database): void {
+export async function backfillReactionStateFromOutDb(outDb: Database.Database): Promise<void> {
   const completed = outDb
     .prepare("SELECT message_id FROM processing_ack WHERE status IN ('completed', 'failed')")
     .all() as Array<{ message_id: string }>;
   if (completed.length === 0) return;
 
-  const stmt = getDb().prepare(
-    `INSERT OR IGNORE INTO host_reaction_state (message_id, last_emitted, updated_at) VALUES (?, 'completed', ?)`,
-  );
+  const db = getDb();
   const now = new Date().toISOString();
-  const tx = getDb().transaction((rows: Array<{ message_id: string }>) => {
-    for (const r of rows) stmt.run(r.message_id, now);
+  // Multi-row inserts, chunked under the bind limit (2 params per row).
+  const ROWS_PER_STMT = Math.floor(IN_CLAUSE_BATCH / 2);
+  await db.transaction(async () => {
+    for (let i = 0; i < completed.length; i += ROWS_PER_STMT) {
+      const chunk = completed.slice(i, i + ROWS_PER_STMT);
+      const values = chunk.map(() => "(?, 'completed', ?)").join(',');
+      const params: string[] = [];
+      for (const r of chunk) params.push(r.message_id, now);
+      await db.run(
+        `INSERT OR IGNORE INTO host_reaction_state (message_id, last_emitted, updated_at) VALUES ${values}`,
+        ...params,
+      );
+    }
   });
-  tx(completed);
 }
 
 async function fireReaction(inMsg: InMsgRow, emoji: string): Promise<void> {

@@ -665,9 +665,9 @@ describe('web channel adapter', () => {
     getDbMock.mockReset();
     getDbMock.mockReturnValue({} as ReturnType<typeof getDb>);
     hasTableMock.mockReset();
-    hasTableMock.mockImplementation((_db: unknown, table: string) => table === 'pending_approvals');
+    hasTableMock.mockImplementation(async (_db: unknown, table: string) => table === 'pending_approvals');
     getAgentGroupMock.mockReset();
-    getAgentGroupMock.mockImplementation((id: string) => {
+    getAgentGroupMock.mockImplementation(async (id: string) => {
       if (id === 'ag-sarah') {
         return { id: 'ag-sarah', folder: 'sarah', name: 'Sarah', agent_provider: null, created_at: '2020-01-01' };
       }
@@ -2800,7 +2800,7 @@ describe('web channel adapter', () => {
   });
 
   it('deletes thread without session cleanup when messaging group is missing', async () => {
-    getMessagingGroupMock.mockReturnValueOnce(undefined);
+    getMessagingGroupMock.mockResolvedValueOnce(undefined);
     await adapter.setup(setup);
     const createRes = await new Promise<{ status: number; body: { id: string } }>((resolve, reject) => {
       const req = http.request(
@@ -2984,7 +2984,7 @@ describe('web channel adapter', () => {
     webchatStore.addEngagedAgents('lobby', 'thread_abc', ['orphan']);
     const groupsSpy = vi
       .spyOn(agentGroups, 'getAllAgentGroups')
-      .mockReturnValue([
+      .mockResolvedValue([
         { id: 'ag-sarah', folder: 'sarah', name: 'Sarah', agent_provider: null, created_at: '2020-01-01' },
       ]);
     try {
@@ -4270,7 +4270,7 @@ describe('web channel adapter', () => {
   });
 
   it('POST actions invokes onAction only once for concurrent mirrored clicks', async () => {
-    getPendingApprovalMock.mockReturnValue({
+    getPendingApprovalMock.mockResolvedValue({
       approval_id: 'approval-once',
       session_id: 'sess-sarah',
     } as never);
@@ -4425,7 +4425,7 @@ describe('web channel adapter', () => {
   });
 
   it('omits senderName when agent group cannot be resolved for approval cards', async () => {
-    getPendingApprovalMock.mockReturnValue({
+    getPendingApprovalMock.mockResolvedValue({
       approval_id: 'approval-no-agent',
       session_id: 'sess-sarah',
     } as never);
@@ -4440,7 +4440,7 @@ describe('web channel adapter', () => {
       channel_type: 'web',
       platform_id: 'dm:sarah',
     } as never);
-    getAgentGroupMock.mockReturnValueOnce(undefined);
+    getAgentGroupMock.mockResolvedValueOnce(undefined);
 
     await adapter.setup(setup);
     await adapter.deliver('inbox', null, {
@@ -4460,7 +4460,7 @@ describe('web channel adapter', () => {
   });
 
   it('resolves senderName from pending approval session agent when omitted', async () => {
-    getPendingApprovalMock.mockReturnValue({
+    getPendingApprovalMock.mockResolvedValue({
       approval_id: 'approval-agent-name',
       session_id: 'sess-sarah',
     } as never);
@@ -4517,7 +4517,7 @@ describe('web channel adapter', () => {
   });
 
   it('does not mirror inbox approval cards when session origin is not web', async () => {
-    getPendingApprovalMock.mockReturnValue({
+    getPendingApprovalMock.mockResolvedValue({
       approval_id: 'approval-telegram',
       session_id: 'sess-telegram',
     } as never);
@@ -4552,7 +4552,7 @@ describe('web channel adapter', () => {
   });
 
   it('does not mirror when pending approval has no session', async () => {
-    getPendingApprovalMock.mockReturnValue({
+    getPendingApprovalMock.mockResolvedValue({
       approval_id: 'approval-no-session',
     } as never);
 
@@ -4573,7 +4573,7 @@ describe('web channel adapter', () => {
   });
 
   it('does not mirror when session has no messaging group', async () => {
-    getPendingApprovalMock.mockReturnValue({
+    getPendingApprovalMock.mockResolvedValue({
       approval_id: 'approval-no-mg',
       session_id: 'sess-no-mg',
     } as never);
@@ -4622,7 +4622,7 @@ describe('web channel adapter', () => {
   });
 
   it('mirrors inbox approval cards to the session origin web room', async () => {
-    getPendingApprovalMock.mockReturnValue({
+    getPendingApprovalMock.mockResolvedValue({
       approval_id: 'approval-mirror',
       session_id: 'sess-sarah',
     } as never);
@@ -4664,7 +4664,7 @@ describe('web channel adapter', () => {
   });
 
   it('updates mirrored approval cards together when an action is taken', async () => {
-    getPendingApprovalMock.mockReturnValue({
+    getPendingApprovalMock.mockResolvedValue({
       approval_id: 'approval-sync',
       session_id: 'sess-sarah',
     } as never);
@@ -4759,7 +4759,7 @@ describe('web channel adapter', () => {
   });
 
   it('POST actions returns 403 when actor is not the named approver', async () => {
-    getPendingApprovalMock.mockReturnValue({
+    getPendingApprovalMock.mockResolvedValue({
       approval_id: 'approval-forbid',
       session_id: 'sess-sarah',
       approver_user_id: 'web:github:999',
@@ -4787,37 +4787,37 @@ describe('web channel adapter', () => {
     expect(actionCaptures).toHaveLength(0);
   });
 
-  it('isAuthorizedApprovalActor allows non-approval cards and exact approver', () => {
-    getPendingApprovalMock.mockReturnValue(undefined);
-    expect(isAuthorizedApprovalActor('web:github:1', 'missing')).toBe(true);
+  it('isAuthorizedApprovalActor allows non-approval cards and exact approver', async () => {
+    getPendingApprovalMock.mockResolvedValue(undefined);
+    expect(await isAuthorizedApprovalActor('web:github:1', 'missing')).toBe(true);
 
-    getPendingApprovalMock.mockReturnValue({
+    getPendingApprovalMock.mockResolvedValue({
       approval_id: 'a1',
       approver_user_id: 'web:github:1',
     } as never);
-    expect(isAuthorizedApprovalActor('web:github:1', 'a1')).toBe(true);
-    expect(isAuthorizedApprovalActor('web:github:2', 'a1')).toBe(false);
+    expect(await isAuthorizedApprovalActor('web:github:1', 'a1')).toBe(true);
+    expect(await isAuthorizedApprovalActor('web:github:2', 'a1')).toBe(false);
   });
 
-  it('isAuthorizedApprovalActor uses admin privilege when approver is unset', () => {
+  it('isAuthorizedApprovalActor uses admin privilege when approver is unset', async () => {
     const isOwnerMock = vi.mocked(isOwner);
     const hasAdminMock = vi.mocked(hasAdminPrivilege);
-    getPendingApprovalMock.mockReturnValue({
+    getPendingApprovalMock.mockResolvedValue({
       approval_id: 'a2',
       agent_group_id: 'ag-1',
       approver_user_id: null,
     } as never);
-    hasAdminMock.mockReturnValueOnce(false);
-    expect(isAuthorizedApprovalActor('web:github:1', 'a2')).toBe(false);
-    hasAdminMock.mockReturnValueOnce(true);
-    expect(isAuthorizedApprovalActor('web:github:1', 'a2')).toBe(true);
-    isOwnerMock.mockReturnValue(true);
+    hasAdminMock.mockResolvedValueOnce(false);
+    expect(await isAuthorizedApprovalActor('web:github:1', 'a2')).toBe(false);
+    hasAdminMock.mockResolvedValueOnce(true);
+    expect(await isAuthorizedApprovalActor('web:github:1', 'a2')).toBe(true);
+    isOwnerMock.mockResolvedValue(true);
   });
 
   it('does not mirror approval cards in public mode when origin owner mismatches approver', async () => {
     adapter = createWebAdapter(publicAdapterOptions(testPort));
     resetWebchatAuthSchemaForTests();
-    getPendingApprovalMock.mockReturnValue({
+    getPendingApprovalMock.mockResolvedValue({
       approval_id: 'approval-public-mirror',
       session_id: 'sess-sarah',
       approver_user_id: 'web:local',
@@ -4858,7 +4858,7 @@ describe('web channel adapter', () => {
     adapter = createWebAdapter(publicAdapterOptions(testPort));
     resetWebchatAuthSchemaForTests();
     const alice = 'web:basic:alice';
-    getPendingApprovalMock.mockReturnValue({
+    getPendingApprovalMock.mockResolvedValue({
       approval_id: 'approval-public-ok',
       session_id: 'sess-sarah',
       approver_user_id: alice,
@@ -4896,7 +4896,7 @@ describe('web channel adapter', () => {
     adapter = createWebAdapter(publicAdapterOptions(testPort));
     resetWebchatAuthSchemaForTests();
     const alice = 'web:basic:alice';
-    getPendingApprovalMock.mockReturnValue({
+    getPendingApprovalMock.mockResolvedValue({
       approval_id: 'approval-public-null-approver',
       session_id: 'sess-sarah',
       approver_user_id: null,
@@ -4912,7 +4912,7 @@ describe('web channel adapter', () => {
       channel_type: 'web',
       platform_id: `dm:sarah:${encodeUserSuffix(alice)}`,
     } as never);
-    vi.mocked(isOwner).mockReturnValue(true);
+    vi.mocked(isOwner).mockResolvedValue(true);
 
     await adapter.setup(setup);
     await adapter.deliver(`inbox:${encodeUserSuffix(alice)}`, null, {
@@ -5004,9 +5004,9 @@ describe('web channel adapter', () => {
     expect(boot.forUserId).toBe('web:basic:alice');
   });
 
-  it('shouldMirrorApprovalToOrigin rejects when origin matches delivery platform', () => {
+  it('shouldMirrorApprovalToOrigin rejects when origin matches delivery platform', async () => {
     expect(
-      shouldMirrorApprovalToOrigin(
+      await shouldMirrorApprovalToOrigin(
         { platformId: 'inbox:web~basic~alice', threadId: 'main' },
         'q',
         'inbox:web~basic~alice',
@@ -5015,13 +5015,17 @@ describe('web channel adapter', () => {
     ).toBe(false);
   });
 
-  it('shouldMirrorApprovalToOrigin covers inbox, local, and lookup guards', () => {
-    expect(shouldMirrorApprovalToOrigin({ platformId: 'inbox', threadId: 'main' }, 'q', 'inbox:x', true)).toBe(false);
-    expect(shouldMirrorApprovalToOrigin({ platformId: 'dm:sarah', threadId: 'main' }, 'q', 'inbox', false)).toBe(true);
+  it('shouldMirrorApprovalToOrigin covers inbox, local, and lookup guards', async () => {
+    expect(await shouldMirrorApprovalToOrigin({ platformId: 'inbox', threadId: 'main' }, 'q', 'inbox:x', true)).toBe(
+      false,
+    );
+    expect(await shouldMirrorApprovalToOrigin({ platformId: 'dm:sarah', threadId: 'main' }, 'q', 'inbox', false)).toBe(
+      true,
+    );
 
-    hasTableMock.mockReturnValueOnce(false);
+    hasTableMock.mockResolvedValueOnce(false);
     expect(
-      shouldMirrorApprovalToOrigin(
+      await shouldMirrorApprovalToOrigin(
         { platformId: `dm:sarah:${encodeUserSuffix('web:basic:alice')}`, threadId: 'main' },
         'q',
         'inbox:x',
@@ -5029,10 +5033,10 @@ describe('web channel adapter', () => {
       ),
     ).toBe(false);
 
-    getPendingApprovalMock.mockReturnValueOnce(undefined);
+    getPendingApprovalMock.mockResolvedValueOnce(undefined);
     // Default isOwner mock is true — null approver still mirrors into an owned room.
     expect(
-      shouldMirrorApprovalToOrigin(
+      await shouldMirrorApprovalToOrigin(
         { platformId: `dm:sarah:${encodeUserSuffix('web:basic:alice')}`, threadId: 'main' },
         'q',
         'inbox:x',
@@ -5040,11 +5044,11 @@ describe('web channel adapter', () => {
       ),
     ).toBe(true);
 
-    vi.mocked(isOwner).mockReturnValueOnce(false);
-    vi.mocked(isGlobalAdmin).mockReturnValueOnce(false);
-    getPendingApprovalMock.mockReturnValueOnce({ approval_id: 'q' } as never);
+    vi.mocked(isOwner).mockResolvedValueOnce(false);
+    vi.mocked(isGlobalAdmin).mockResolvedValueOnce(false);
+    getPendingApprovalMock.mockResolvedValueOnce({ approval_id: 'q' } as never);
     expect(
-      shouldMirrorApprovalToOrigin(
+      await shouldMirrorApprovalToOrigin(
         { platformId: `dm:sarah:${encodeUserSuffix('web:basic:alice')}`, threadId: 'main' },
         'q',
         'inbox:x',
@@ -5052,16 +5056,18 @@ describe('web channel adapter', () => {
       ),
     ).toBe(false);
 
-    getPendingApprovalMock.mockReturnValueOnce({
+    getPendingApprovalMock.mockResolvedValueOnce({
       approver_user_id: 'web:basic:alice',
     } as never);
-    expect(shouldMirrorApprovalToOrigin({ platformId: 'lobby', threadId: 'main' }, 'q', 'inbox:x', true)).toBe(false);
+    expect(await shouldMirrorApprovalToOrigin({ platformId: 'lobby', threadId: 'main' }, 'q', 'inbox:x', true)).toBe(
+      false,
+    );
 
     getPendingApprovalMock.mockImplementationOnce(() => {
       throw new Error('mirror lookup failed');
     });
     expect(
-      shouldMirrorApprovalToOrigin(
+      await shouldMirrorApprovalToOrigin(
         { platformId: `dm:sarah:${encodeUserSuffix('web:basic:alice')}`, threadId: 'main' },
         'q',
         'inbox:x',
@@ -5070,30 +5076,30 @@ describe('web channel adapter', () => {
     ).toBe(false);
   });
 
-  it('isAuthorizedApprovalActor allows when pending_approvals table is missing', () => {
-    hasTableMock.mockReturnValueOnce(false);
-    expect(isAuthorizedApprovalActor('web:anyone', 'q')).toBe(true);
+  it('isAuthorizedApprovalActor allows when pending_approvals table is missing', async () => {
+    hasTableMock.mockResolvedValueOnce(false);
+    expect(await isAuthorizedApprovalActor('web:anyone', 'q')).toBe(true);
   });
 
-  it('isAuthorizedApprovalActor fails closed when lookup throws', () => {
+  it('isAuthorizedApprovalActor fails closed when lookup throws', async () => {
     getPendingApprovalMock.mockImplementation(() => {
       throw new Error('db down');
     });
-    expect(isAuthorizedApprovalActor('web:local', 'q')).toBe(false);
+    expect(await isAuthorizedApprovalActor('web:local', 'q')).toBe(false);
   });
 
-  it('isAuthorizedApprovalActor uses owner check when agent group is unset', () => {
+  it('isAuthorizedApprovalActor uses owner check when agent group is unset', async () => {
     const isOwnerMock = vi.mocked(isOwner);
     const isGlobalAdminMock = vi.mocked(isGlobalAdmin);
-    getPendingApprovalMock.mockReturnValue({
+    getPendingApprovalMock.mockResolvedValue({
       approval_id: 'a3',
       agent_group_id: null,
       session_id: null,
       approver_user_id: null,
     } as never);
-    isOwnerMock.mockReturnValueOnce(false);
-    isGlobalAdminMock.mockReturnValueOnce(true);
-    expect(isAuthorizedApprovalActor('web:github:1', 'a3')).toBe(true);
+    isOwnerMock.mockResolvedValueOnce(false);
+    isGlobalAdminMock.mockResolvedValueOnce(true);
+    expect(await isAuthorizedApprovalActor('web:github:1', 'a3')).toBe(true);
   });
 
   it('skips public mirror when approval lookup throws', async () => {

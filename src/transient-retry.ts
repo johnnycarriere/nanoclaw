@@ -23,7 +23,12 @@
  */
 import type Database from 'better-sqlite3';
 
-import { getMessageForRetry, retryWithBackoff, markMessageFailed, openOutboundDbRw } from './db/session-db.js';
+import {
+  getMessageForRetry,
+  retryWithBackoff,
+  markMessageFailed,
+  openOutboundDbRw,
+} from './mailbox/sqlite/session-db.js';
 import { log } from './log.js';
 
 const MAX_TRIES = 5;
